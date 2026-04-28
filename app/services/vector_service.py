@@ -1,0 +1,193 @@
+"""向量数据库服务 - Chroma"""
+import os
+from typing import List, Dict, Any, Optional
+import chromadb
+from chromadb.config import Settings
+from langchain_ollama import OllamaEmbeddings
+from langchain_openai import OpenAIEmbeddings
+
+class VectorService:
+    """向量数据库服务"""
+    
+    def __init__(self, config: Dict[str, Any]):
+        self.config = config
+        self.vector_config = config.get("vector_db", {})
+        self.embedding_config = config.get("embedding", {})
+        
+        # 初始化Chroma客户端
+        persist_dir = self.vector_config.get("persist_directory", "./data/chroma_db")
+        os.makedirs(persist_dir, exist_ok=True)
+        
+        self.client = chromadb.PersistentClient(
+            path=persist_dir,
+            settings=Settings(anonymized_telemetry=False)
+        )
+        
+        # 初始化嵌入模型
+        self._init_embeddings()
+        
+        # 获取或创建collection
+        collection_name = self.vector_config.get("collection_name", "knowledge_base")
+        self.collection = self.client.get_or_create_collection(
+            name=collection_name,
+            metadata={"description": "知识库向量存储"}
+        )
+    
+    def _init_embeddings(self):
+        """初始化嵌入模型"""
+        provider = self.embedding_config.get("provider", "ollama")
+        
+        if provider == "ollama":
+            model = self.embedding_config.get("model", "qwen3-embedding:8b-fp16")
+            self.embeddings = OllamaEmbeddings(model=model)
+        elif provider == "openai":
+            self.embeddings = OpenAIEmbeddings(
+                model="text-embedding-3-small"
+            )
+        else:
+            raise ValueError(f"不支持的嵌入provider: {provider}")
+    
+    def add_documents(self, texts: List[str], metadatas: Optional[List[Dict]] = None, ids: Optional[List[str]] = None) -> List[str]:
+        """添加文档到向量库"""
+        if ids is None:
+            ids = [str(i) for i in range(len(texts))]
+        
+        # 生成嵌入向量
+        embeddings = self.embeddings.embed_documents(texts)
+        
+        # 添加到Chroma
+        self.collection.add(
+            documents=texts,
+            embeddings=embeddings,
+            metadatas=metadatas,
+            ids=ids
+        )
+        
+        return ids
+    
+    def similarity_search(self, query: str, top_k: int = 5) -> List[Dict[str, Any]]:
+        """相似度搜索"""
+        # 生成查询向量
+        query_embedding = self.embeddings.embed_query(query)
+        
+        # 执行搜索
+        results = self.collection.query(
+            query_embeddings=[query_embedding],
+            n_results=top_k
+        )
+        
+        # 格式化返回结果
+        formatted_results = []
+        if results["documents"] and results["documents"][0]:
+            for i, doc in enumerate(results["documents"][0]):
+                formatted_results.append({
+                    "content": doc,
+                    "distance": results["distances"][0][i] if "distances" in results else None,
+                    "metadata": results["metadatas"][0][i] if "metadatas" in results and results["metadatas"] else None,
+                    "id": results["ids"][0][i] if "ids" in results else None
+                })
+        
+        return formatted_results
+    
+    def delete_collection(self):
+        """删除collection"""
+        self.client.delete_collection(self.collection.name)
+        # 重新创建collection
+        collection_name = self.vector_config.get("collection_name", "knowledge_base")
+        self.collection = self.client.get_or_create_collection(
+            name=collection_name,
+            metadata={"description": "知识库向量存储"}
+        )
+    
+    def get_collection_info(self) -> Dict[str, Any]:
+        """获取collection信息"""
+        return {
+            "name": self.collection.name,
+            "count": self.collection.count(),
+            "metadata": self.collection.metadata
+        }
+    
+    def get_by_metadata(self, field: str, values: List[str]) -> List[Dict[str, Any]]:
+        """根据metadata字段精确匹配查询"""
+        if len(values) == 1:
+            # 单个值直接查询
+            results = self.collection.get(
+                where={field: values[0]}
+            )
+        else:
+            # 多个值用 $or 查询
+            results = self.collection.get(
+                where={"$or": [{field: v} for v in values]}
+            )
+        
+        formatted_results = []
+        if results["documents"]:
+            for i, doc in enumerate(results["documents"]):
+                formatted_results.append({
+                    "content": doc,
+                    "metadata": results["metadatas"][i] if results["metadatas"] else None,
+                    "id": results["ids"][i] if results["ids"] else None
+                })
+        
+        return formatted_results
+
+    def compute_similarity(self, query: str, text: str) -> float:
+        """计算两个文本的相似度（返回0-1之间的值）"""
+        if not query or not text:
+            return 0.0
+
+        # 生成两个文本的嵌入向量
+        query_embedding = self.embeddings.embed_query(query)
+        text_embedding = self.embeddings.embed_query(text)
+
+        # 计算余弦相似度
+        import numpy as np
+        query_vec = np.array(query_embedding)
+        text_vec = np.array(text_embedding)
+
+        # 余弦相似度公式
+        dot_product = np.dot(query_vec, text_vec)
+        norm_query = np.linalg.norm(query_vec)
+        norm_text = np.linalg.norm(text_vec)
+
+        if norm_query == 0 or norm_text == 0:
+            return 0.0
+
+        similarity = dot_product / (norm_query * norm_text)
+        return float(max(0, min(1, similarity)))
+
+    def compute_similarities_batch(self, query: str, texts: List[str]) -> List[float]:
+        """批量计算多个文本与查询的相似度（并行优化）"""
+        import numpy as np
+        from concurrent.futures import ThreadPoolExecutor
+        import os
+
+        if not query or not texts:
+            return [0.0] * len(texts)
+
+        # 一次性生成查询向量（避免重复计算）
+        query_embedding = self.embeddings.embed_query(query)
+        query_vec = np.array(query_embedding)
+        norm_query = np.linalg.norm(query_vec)
+
+        if norm_query == 0:
+            return [0.0] * len(texts)
+
+        def compute_one(text: str) -> float:
+            if not text:
+                return 0.0
+            text_embedding = self.embeddings.embed_query(text)
+            text_vec = np.array(text_embedding)
+            dot_product = np.dot(query_vec, text_vec)
+            norm_text = np.linalg.norm(text_vec)
+            if norm_text == 0:
+                return 0.0
+            similarity = dot_product / (norm_query * norm_text)
+            return float(max(0, min(1, similarity)))
+
+        # 使用线程池并行计算
+        max_workers = min(8, os.cpu_count() or 4)
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            results = list(executor.map(compute_one, texts))
+
+        return results
