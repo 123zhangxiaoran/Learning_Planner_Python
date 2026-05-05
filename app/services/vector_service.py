@@ -159,8 +159,10 @@ class VectorService:
     def compute_similarities_batch(self, query: str, texts: List[str]) -> List[float]:
         """批量计算多个文本与查询的相似度（并行优化）"""
         import numpy as np
-        from concurrent.futures import ThreadPoolExecutor
+        from concurrent.futures import ThreadPoolExecutor, as_completed
         import os
+        from queue import Queue
+        import threading
 
         if not query or not texts:
             return [0.0] * len(texts)
@@ -173,21 +175,54 @@ class VectorService:
         if norm_query == 0:
             return [0.0] * len(texts)
 
-        def compute_one(text: str) -> float:
-            if not text:
-                return 0.0
-            text_embedding = self.embeddings.embed_query(text)
-            text_vec = np.array(text_embedding)
-            dot_product = np.dot(query_vec, text_vec)
-            norm_text = np.linalg.norm(text_vec)
-            if norm_text == 0:
-                return 0.0
-            similarity = dot_product / (norm_query * norm_text)
-            return float(max(0, min(1, similarity)))
+        # 创建任务队列和结果存储
+        task_queue = Queue()
+        results = [0.0] * len(texts)
+        results_lock = threading.Lock()
+
+        # 将任务放入队列 (index, text)
+        for i, text in enumerate(texts):
+            task_queue.put((i, text))
+
+        def worker():
+            """工作线程：从队列竞争获取任务并执行"""
+            while True:
+                try:
+                    idx, text = task_queue.get(block=False)
+                except:
+                    # 队列为空，线程结束
+                    break
+
+                # 计算相似度
+                if not text:
+                    similarity = 0.0
+                else:
+                    text_embedding = self.embeddings.embed_query(text)
+                    text_vec = np.array(text_embedding)
+                    dot_product = np.dot(query_vec, text_vec)
+                    norm_text = np.linalg.norm(text_vec)
+                    if norm_text == 0:
+                        similarity = 0.0
+                    else:
+                        similarity = dot_product / (norm_query * norm_text)
+                        similarity = float(max(0, min(1, similarity)))
+
+                # 写入结果（需要加锁保证线程安全）
+                with results_lock:
+                    results[idx] = similarity
+
+                task_queue.task_done()
 
         # 使用线程池并行计算
         max_workers = min(8, os.cpu_count() or 4)
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            results = list(executor.map(compute_one, texts))
+        threads = []
+        for _ in range(max_workers):
+            t = threading.Thread(target=worker)
+            t.start()
+            threads.append(t)
+
+        # 等待所有线程完成
+        for t in threads:
+            t.join()
 
         return results

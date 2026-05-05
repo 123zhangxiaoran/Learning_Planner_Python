@@ -96,8 +96,8 @@ async def search_jobs(request: JobSearchRequest):
             r = results[valid_indices[idx]]
             metadata = r.get("metadata", {})
 
-            # 取平均值
-            avg_similarity = (sim_major + sim_full) / 2
+            # 取加权平均（名称0.3 + 描述0.7）
+            avg_similarity = sim_major * 0.3 + sim_full * 0.7
 
             jobs.append({
                 "job_name": metadata.get("level3"),
