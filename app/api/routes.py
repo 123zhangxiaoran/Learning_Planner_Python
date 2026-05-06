@@ -27,6 +27,8 @@ class SkillSearchRequest(BaseModel):
     jobs: List[str]  # 岗位名称列表（支持多个岗位）
     top_k: int = 5
     min_score: float = 0.3  # 最低相似度阈值
+    isNews: Optional[bool] = True  # 是否新请求
+    jobToken: Optional[int] = None  # 岗位令牌
 
 class SkillAnalyticalRequest(BaseModel):
     """技能分析对比请求"""
@@ -154,11 +156,17 @@ async def search_skills(request: SkillSearchRequest):
                     "major": metadata.get("level2")
                 })
         
-        return {
+        response = {
             "success": True,
             "query": request.jobs,
             "skills": all_skills[:request.top_k]
         }
+        
+        # isNews为false时返回jobToken
+        if not request.isNews:
+            response["jobToken"] = request.jobToken
+        
+        return response
     
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"查询失败: {str(e)}")
