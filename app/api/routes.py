@@ -69,9 +69,9 @@ async def search_jobs(request: JobSearchRequest):
             top_k=50  # 多取一些，后面重新排序
         )
 
-        # 提取所有需要计算相似度的文本
+        # 提取所有需要计算相似度的文本（去掉技能，只保留专业+岗位+描述）
         majors = []
-        full_texts = []
+        job_texts = []  # 专业+岗位+描述，不包含技能
         valid_indices = []
 
         for i, r in enumerate(results):
@@ -79,7 +79,9 @@ async def search_jobs(request: JobSearchRequest):
             if not metadata.get("level3"):
                 continue
             majors.append(metadata.get("level2", ""))
-            full_texts.append(r.get("content", ""))
+            # 构建不包含技能的文本：专业+岗位+描述
+            job_text = f"专业：{metadata.get('level2', '')} | 岗位：{metadata.get('level3', '')} | 描述：{metadata.get('level3_desc', '')}"
+            job_texts.append(job_text)
             valid_indices.append(i)
 
         # 批量并行计算专业名称相似度
@@ -87,28 +89,35 @@ async def search_jobs(request: JobSearchRequest):
             request.major, majors
         ) if majors else []
 
-        # 批量并行计算完整文本相似度
-        similarity_fulls = vector_service.compute_similarities_batch(
-            request.major, full_texts
-        ) if full_texts else []
+        # 批量并行计算岗位文本相似度（不含技能）
+        similarity_jobs = vector_service.compute_similarities_batch(
+            request.major, job_texts
+        ) if job_texts else []
 
         # 构建结果列表
         jobs = []
-        for idx, (sim_major, sim_full) in enumerate(zip(similarity_majors, similarity_fulls)):
+        for idx, (sim_major, sim_job) in enumerate(zip(similarity_majors, similarity_jobs)):
             r = results[valid_indices[idx]]
             metadata = r.get("metadata", {})
 
-            # 取加权平均（名称0.3 + 描述0.7）
-            avg_similarity = sim_major * 0.3 + sim_full * 0.7
+            # 检查是否有 >=70% 的原始相似度（不用权重）
+            max_raw_similarity = max(sim_major, sim_job)
+
+            if max_raw_similarity >= 0.7:
+                # 有 >=70% 的，直接用最大的，不用权重
+                final_similarity = max_raw_similarity
+            else:
+                # 没有达到70% 的，使用权重计算
+                final_similarity = sim_major * 0.35 + sim_job * 0.65
 
             jobs.append({
                 "job_name": metadata.get("level3"),
                 "job_description": metadata.get("level3_desc"),
                 "major": metadata.get("level2"),
-                "similarity": round(avg_similarity * 100, 2)  # 相似度百分比
+                "similarity": round(final_similarity * 100, 2)  # 相似度百分比
             })
 
-        # 按平均相似度重新排序
+        # 按相似度重新排序
         jobs.sort(key=lambda x: x["similarity"], reverse=True)
 
         # 过滤掉相似度低于60%的结果
@@ -257,12 +266,21 @@ async def skill_analytical(request: SkillAnalyticalRequest):
             request.text, skill_descs
         )
 
-        # 找出最大值作为最终匹配度
+        # 找出最佳匹配（使用权重逻辑：>=70%直接取最大，否则用权重）
         best_skill = None
         best_similarity = -1
 
         for i, skill in enumerate(skills_data):
-            combined_sim = max(name_sims[i], desc_sims[i])  # 取最大值
+            name_sim = name_sims[i]
+            desc_sim = desc_sims[i]
+            max_raw_sim = max(name_sim, desc_sim)
+
+            # 如果任一相似度 >=70%，直接取最大值；否则使用权重
+            if max_raw_sim >= 0.7:
+                combined_sim = max_raw_sim
+            else:
+                combined_sim = name_sim * 0.35 + desc_sim * 0.65
+
             if combined_sim > best_similarity:
                 best_similarity = combined_sim
                 best_skill = skill
