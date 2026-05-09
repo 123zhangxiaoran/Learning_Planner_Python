@@ -31,9 +31,10 @@ class SkillSearchRequest(BaseModel):
     jobToken: Optional[int] = None  # 岗位令牌
 
 class SkillAnalyticalRequest(BaseModel):
-    """技能分析对比请求"""
-    text: str  # 用户输入的文本（包含技能描述等信息）
-    job_names: List[str]  # 岗位名称数组
+    """技能分析对比请求 - 用于大模型提示词生成"""
+    text: str  # 用户输入的文本（如"你好"、技能描述、问题等）
+    job_names: List[str]  # 岗位名称数组（如["后端开发工程师"]）
+    selected_skill: Optional[str] = None  # 用户选中的技能（如"Java"）
 
 class AddDocumentRequest(BaseModel):
     """添加文档请求"""
@@ -148,16 +149,29 @@ async def search_skills(request: SkillSearchRequest):
             metadata = r.get("metadata", {})
             
             level4_desc = metadata.get("level4_desc", "")
+            skills_difficulty = metadata.get("skills_difficulty", "")
             skills_list = []
+
+            # 解析技能难度
+            difficulty_map = {}
+            if skills_difficulty:
+                for item in skills_difficulty.split('; '):
+                    if '(' in item and ')' in item:
+                        skill_name = item.split('(')[0].strip()
+                        difficulty = item.split('(')[1].rstrip(')')
+                        difficulty_map[skill_name] = int(difficulty)
+
             if level4_desc:
                 for item in level4_desc.split('; '):
                     if ':' in item:
                         skill_name, skill_desc = item.split(':', 1)
+                        skill_name = skill_name.strip()
                         skills_list.append({
-                            "name": skill_name.strip(),
-                            "description": skill_desc.strip()
+                            "name": skill_name,
+                            "description": skill_desc.strip(),
+                            "difficulty": difficulty_map.get(skill_name, 2)
                         })
-            
+
             if metadata.get("level3") and skills_list:
                 all_skills.append({
                     "job_name": metadata.get("level3"),
@@ -225,80 +239,30 @@ async def health_check():
 @router.post("/api/skill/analytical")
 async def skill_analytical(request: SkillAnalyticalRequest):
     """
-    技能分析对比接口
-    根据输入文本和岗位名称数组，返回相似度最高的技能名称（异步多线程优化）
+    技能分析接口 - 为大模型提示词模板提供数据
+    
+    提取三个核心字段用于提示词生成：
+    - text: 用户输入的原始文本
+    - job_names: 目标岗位列表
+    - selected_skill: 用户选中的技能
+    
+    同时返回该岗位下的所有技能列表，供大模型分析和生成学习计划
     """
     try:
-        # 根据岗位名称数组获取对应岗位数据
-        results = vector_service.get_by_metadata("level3", request.job_names)
+        # 构建提示词模板所需的数据结构
+        prompt_data = {
+            "text": request.text,                    # 用户输入文本
+            "target_jobs": request.job_names[0],        # 目标岗位
+            "selected_skill": request.selected_skill  # 选中的技能
+        }
 
-        # 收集所有技能数据
-        skills_data = []
-        for r in results:
-            metadata = r.get("metadata", {})
-            level4_desc = metadata.get("level4_desc", "")
-
-            if level4_desc:
-                for item in level4_desc.split('; '):
-                    if ':' in item:
-                        skill_name, skill_desc = item.split(':', 1)
-                        skills_data.append({
-                            "skill_name": skill_name.strip(),
-                            "skill_desc": skill_desc.strip(),
-                            "job_name": metadata.get("level3"),
-                            "major": metadata.get("level2")
-                        })
-
-        if not skills_data:
-            return {"best_match_skill": None}
-
-        # 提取所有技能名称和描述用于批量计算
-        skill_names = [s["skill_name"] for s in skills_data]
-        skill_descs = [s["skill_desc"] for s in skills_data]
-
-        # 批量并行计算技能名称相似度
-        name_sims = vector_service.compute_similarities_batch(
-            request.text, skill_names
-        )
-
-        # 批量并行计算技能描述相似度
-        desc_sims = vector_service.compute_similarities_batch(
-            request.text, skill_descs
-        )
-
-        # 找出最佳匹配（使用权重逻辑：>=70%直接取最大，否则用权重）
-        best_skill = None
-        best_similarity = -1
-
-        for i, skill in enumerate(skills_data):
-            name_sim = name_sims[i]
-            desc_sim = desc_sims[i]
-            max_raw_sim = max(name_sim, desc_sim)
-
-            # 如果任一相似度 >=70%，直接取最大值；否则使用权重
-            if max_raw_sim >= 0.7:
-                combined_sim = max_raw_sim
-            else:
-                combined_sim = name_sim * 0.35 + desc_sim * 0.65
-
-            if combined_sim > best_similarity:
-                best_similarity = combined_sim
-                best_skill = skill
-
-        # 如果匹配度低于阈值（0.6，即60%），返回空值
-        if best_similarity < 0.6:
-            return {
-                "best_match_skill": None
-            }
-
-        if best_skill:
-            return {
-                "best_match_skill": best_skill["skill_name"]
-            }
-        else:
-            return {
-                "best_match_skill": None
-            }
+        # 在调用大模型生成学习资料
+        ai_response = await ai_service.generate_learning_plan(prompt_data)
+        return {
+            "success": True,
+            "data": ai_response,
+            "message": "大模型数据推理成功"
+        }
 
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"技能分析失败: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"学习资料生成失败: {str(e)}")
