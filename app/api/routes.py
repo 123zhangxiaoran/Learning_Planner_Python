@@ -257,7 +257,7 @@ async def skill_analytical(request: SkillAnalyticalRequest):
         }
 
         # 在调用大模型生成学习资料
-        ai_response = await ai_service.generate_learning_plan(prompt_data)
+        ai_response = ai_service.generate_learning_plan(prompt_data)
         return {
             "success": True,
             "data": ai_response,
