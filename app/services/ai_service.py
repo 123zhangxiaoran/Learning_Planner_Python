@@ -27,7 +27,7 @@ class AIService:
         self.llm_generator = ChatOpenAI(
             api_key=api_key,
             model="qwen-plus",
-            temperature=self.ai_config.get("temperature", 0.8),
+            temperature=self.ai_config.get("temperature", 0.7),
             max_tokens=self.ai_config.get("max_tokens", 2000),
             base_url="https://dashscope.aliyuncs.com/compatible-mode/v1"
         )
@@ -141,7 +141,7 @@ class AIService:
 
         # 初始化ReAct智能体
         agent = create_react_agent(
-            llm=self.llm_generator,
+            llm=self.llm_parser,
             tools=[quiz_tool],
             prompt=react_prompt
         )
