@@ -68,7 +68,7 @@ class AIService:
 
         可选值：
             - difficulty: "简单"/"中等"/"困难"，没有默认值：简单
-            - question_type: "choice(选择题)"/"filling(填空题)"/"true_false(判断题)"/"analysis(分析题)"/"writing(编写题)"，没有默认值：choice
+            - question_type: "choice(选择题)"/"filling(填空题)"/"true_false(判断题)"/"analysis(分析题)"/"writing(写作题)"，没有默认值：choice
             - topic: 知识点，没有默认值：基础知识点
 
         直接返回 JSON 格式：{{"topic": "...", "difficulty": "简单", "question_type": "choice"}}"""
@@ -83,8 +83,7 @@ class AIService:
                 "choice": "生成一道选择题，包含4个选项，里面只有一个正确答案，指明正确答案，并给出解析",
                 "filling": "生成一道填空题，留出一个空白(在重点关键词)，并给出答案",
                 "true_false": "生成一道判断题，陈述正确或错误，并解释原因",
-                "analysis": "生成一道分析题，要求分析输出结果，并附带解析",
-                "writing": "生成一道编写大题，并给出参考答案"
+                "analysis": "生成一道分析题，要求分析输出结果，并附带解析"
             }
             instruction = type_instructions.get(question_type, type_instructions["choice"])
             question_prompt = f"""你是一个题目生成机器人，只能输出JSON格式，禁止输出任何其他内容。

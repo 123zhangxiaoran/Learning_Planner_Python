@@ -37,7 +37,7 @@ Learning_Planner_Python/
 - **LangChain Community/Ollama/OpenAI** - LangChain 扩展包，支持不同的嵌入模型
 
 ### AI 模型
-- **通义千问 (qwen-turbo)** - 阿里云 DashScope 提供的大语言模型
+- **通义千问 (qwen-plus)** - 阿里云 DashScope 提供的大语言模型
 - **Ollama (bge-m3)** - 本地嵌入模型，用于生成文本向量
 
 ### 其他依赖
@@ -81,9 +81,9 @@ python main.py
   - 参数：jobs（岗位列表）、top_k、min_score
   - 功能：根据岗位名称返回技能要求（精确匹配）
 
-- **POST /api/skill/analytical** - 技能分析对比
-  - 参数：text（用户输入）、job_names（岗位列表）
-  - 功能：对比输入文本与岗位技能，返回最匹配的技能名称
+- **POST /api/skill/analytical** - 学习资料生成
+  - 参数：text（用户输入）、job_names（岗位列表）、selected_skill（选中的技能）
+  - 功能：调用 AI 服务，基于 ReAct Agent 架构生成学习计划和学习题目
 
 #### 管理接口
 - **POST /api/documents** - 添加文档到向量库
@@ -107,17 +107,42 @@ python main.py
 - 向量持久化存储，重启后数据不丢失
 
 #### AIService (ai_service.py)
-AI 问答服务，提供以下功能：
-- **generate_answer** - 根据上下文和问题生成 AI 回答
-- **chat** - 通用聊天接口
+AI 问答服务，基于 **ReAct Agent 架构**，提供以下功能：
+- **generate_learning_plan** - 生成学习计划和题目（主入口）
+- **generate_quiz 工具** - 生成题目的 StructuredTool
 
-**上下文构建：**
-- 支持从 JSON 数据构建上下文（Java 后端传入）
-- 支持从向量检索结果构建上下文（知识库检索）
+**架构特点：**
+- **双模型设计**：
+  - `llm_parser`：意图识别 + 参数提取（temperature=0）
+  - `llm_generator`：题目内容生成（temperature=0.7）
+- **ReAct Agent**：理解用户意图，自动调用题目生成工具
+- **StructuredTool**：将题目生成函数封装为 LangChain 工具
 
-**提示词模板：**
-- System 模板：定义 AI 助手的角色
-- User 模板：包含上下文和用户问题
+**支持的题目类型**：
+| 类型 | 标识 | 说明 |
+|------|------|------|
+| 选择题 | choice | 4个选项，唯一正确答案，含解析 |
+| 填空题 | filling | 留出空白关键词，含答案 |
+| 判断题 | true_false | 判断正误，解释原因 |
+| 分析题 | analysis | 分析输出结果，附带解析 |
+| 写作题 | writing | 写作任务 |
+
+**输入参数**：
+- `text`：用户原始输入
+- `target_jobs`：目标岗位列表
+- `selected_skill`：选中的技能
+
+**输出格式**：
+```json
+{
+    "type": "choice",
+    "stem": "题目题干",
+    "options": ["A. xxx", "B. xxx", "C. xxx", "D. xxx"],
+    "answer": "正确答案",
+    "explanation": "详细解析",
+    "code_snippet": "代码片段或空字符串"
+}
+```
 
 ### 5. 数据初始化 (init_vectors.py)
 
@@ -143,10 +168,11 @@ AI 问答服务，提供以下功能：
 ### 岗位查询流程
 1. 用户输入专业方向（如"软件工程"）
 2. VectorService 使用向量检索返回相似岗位（初始取 50 个）
-3. 批量计算专业名称相似度和完整文本相似度
-4. 取平均值作为最终相似度并重新排序
-5. 过滤相似度低于 60% 的结果
-6. 返回 Top 6 岗位
+3. **相似度匹配算法**：
+   - **70% 阈值直接命中**：若专业名称相似度 ≥ 70%，直接使用该结果
+   - **否则使用权重计算**：专业名称相似度 35% + 完整文本相似度 65%
+4. 批量计算加权相似度并重新排序
+5. 返回 Top 岗位结果
 
 ### 技能查询流程
 1. 用户输入岗位名称列表（如["前端开发工程师", "后端开发工程师"]）
@@ -154,11 +180,14 @@ AI 问答服务，提供以下功能：
 3. 解析技能详细描述（格式：`技能:描述; 技能:描述`）
 4. 返回技能列表及描述
 
-### 技能分析对比流程
-1. 用户输入文本和岗位名称数组
-2. 提取所有岗位的技能数据
-3. 批量计算输入文本与技能名称/描述的相似度
-4. 返回相似度最高的技能名称（阈值 60%）
+### 技能分析对比流程（学习计划和题目生成）
+1. 用户输入文本、目标岗位列表、选中的技能
+2. 调用 `generate_learning_plan` 启动 ReAct Agent
+3. Agent 识别用户意图（生成题目）
+4. 调用 `generate_quiz` 工具：
+   - `llm_parser` 提取参数（难度、题型、知识点）
+   - `llm_generator` 生成题目内容
+5. 返回格式化题目 JSON
 
 ## 环境变量
 
