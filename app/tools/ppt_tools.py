@@ -1,5 +1,6 @@
 """PPT生成工具"""
 from langchain_core.tools import StructuredTool
+from pptx import Presentation
 
 
 def create_ppt_tool(llm_generator, target_jobs: str, selected_skill: str) -> StructuredTool:

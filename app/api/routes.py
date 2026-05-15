@@ -1,5 +1,5 @@
 """API路由"""
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional, List, Union
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
@@ -47,6 +47,11 @@ class QuestionRequest(BaseModel):
     context: Optional[Dict[str, Any]] = None
     use_vector_search: bool = True
     top_k: int = 5
+
+class FetchSkillKnowRequest(BaseModel):
+    """获取技能知识点请求"""
+    job_names: str  # 岗位名称
+    selected_skill: str  # 选中的技能名称
 
 class AnswerResponse(BaseModel):
     """问答响应"""
@@ -266,3 +271,61 @@ async def skill_analytical(request: SkillAnalyticalRequest):
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"学习资料生成失败: {str(e)}")
+
+
+@router.post("/api/skill/fetchSkill")
+async def fetch_skill_knowledge(request: FetchSkillKnowRequest):
+    """
+    获取技能知识点接口
+    根据岗位名称列表和选中的技能，返回该技能的知识点维度
+    """
+    try:
+        # 使用 get_by_metadata 根据岗位名称精确查询
+        results = vector_service.get_by_metadata("level3", [request.job_names])
+
+        for r in results:
+            metadata = r.get("metadata", {})
+            # 从 level4_desc 中解析技能和描述
+            level4_desc = metadata.get("level4_desc", "")
+            skills_difficulty = metadata.get("skills_difficulty", "")
+
+            # 构建技能难度映射
+            difficulty_map = {}
+            if skills_difficulty:
+                for item in skills_difficulty.split('; '):
+                    if '(' in item and item.endswith(')'):
+                        skill_name = item.split('(')[0].strip()
+                        difficulty = item.split('(')[1].rstrip(')')
+                        difficulty_map[skill_name] = int(difficulty)
+
+            # 解析技能描述，找到用户选中的技能
+            if level4_desc:
+                for item in level4_desc.split('; '):
+                    if ':' in item:
+                        skill_name, skill_desc = item.split(':', 1)
+                        skill_name = skill_name.strip()
+
+                        # 找到匹配的技能
+                        if skill_name == request.selected_skill:
+                            # 从 metadata 中获取该技能的知识点
+                            dim_key = f"skill_dims_{skill_name}"
+                            dimensions_str = metadata.get(dim_key, "")
+                            dimensions_list = [d.strip() for d in dimensions_str.split('; ')] if dimensions_str else []
+
+                            return {
+                                "success": True,
+                                "skill_name": skill_name,
+                                "skill_description": skill_desc.strip(),
+                                "difficulty": difficulty_map.get(skill_name, 2),
+                                "dimensions": dimensions_list,
+                                "job_name": metadata.get("level3"),
+                                "major": metadata.get("level2")
+                            }
+
+        return {
+            "success": False,
+            "message": f"未找到技能 '{request.selected_skill}' 对应的知识点"
+        }
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"获取技能知识点失败: {str(e)}")

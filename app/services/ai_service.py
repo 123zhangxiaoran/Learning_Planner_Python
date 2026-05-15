@@ -85,10 +85,10 @@ class AIService:
         
 
         示例1：
-        用户："出一道难的基础知识判断题"
-        Thought: 用户要出题目，使用出题工具，根据工具"parameters"提取参数：topic未指定填"基础知识点"，difficulty有"困难"选项，question_type有"true_false"对应判断题
+        用户："出一道关于底层原理比较难的判断题"
+        Thought: 用户要出题目，使用出题工具，根据工具"parameters"提取参数：topic指定"底层原理"，difficulty有"困难"选项，question_type有"true_false"对应判断题
         Action: generate_quiz
-        Action Input: {{"topic": "基础知识点", "difficulty": "困难", "question_type": "true_false"}}
+        Action Input: {{"topic": "底层原理", "difficulty": "困难", "question_type": "true_false"}}
 
         示例2：
         用户："出一道编写题"
@@ -97,6 +97,18 @@ class AIService:
         Action Input: {{"topic": "基础知识点", "difficulty": "简单", "question_type": "choice"}}
         
         示例3：
+        用户："出个填空题"
+        Thought: 用户要出题目，使用出题工具，根据工具"parameters"提取参数：topic未指定填"基础知识点"，difficulty未指定填"简单"，question_type对应填空题为"filling"
+        Action: generate_quiz
+        Action Input: {{"topic": "基础知识点", "difficulty": "简单", "question_type": "filling"}}
+        
+        示例4：
+        用户："出一道还行的分析题"
+        Thought: 用户要出题目，使用出题工具，根据工具"parameters"提取参数：topic未指定填"基础知识点"，difficulty有"中等"，question_type对应填空题为"analysis"
+        Action: generate_quiz
+        Action Input: {{"topic": "基础知识点", "difficulty": "中等", "question_type": "analysis"}}
+        
+        示例5：
         用户："小文，你好啊！"
         Thought: 用户要聊天，使用聊天工具，根据工具"parameters"提取参数：question是用户的输入
         Action: chat

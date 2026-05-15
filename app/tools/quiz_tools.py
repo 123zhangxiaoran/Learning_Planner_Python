@@ -42,7 +42,7 @@ def create_quiz_tool(llm_generator, target_jobs: str, selected_skill: str) -> St
         "type": "{question_type}",
         "stem": "题目题干",
         "options": ["A. xxx", "B. xxx", "C. xxx", "D. xxx"],
-        "answer": "正确答案",
+        "answer": "正确答案",(如果是填空题和分析题，只需要答案字符串，不要前面的字母)
         "explanation": "详细解析",
         "code_snippet": "如果有代码，放在这里，否则为空字符串",
         "tool": "generate_quiz(不要修改这个字段，只保留括号外面的部分)"
