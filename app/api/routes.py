@@ -32,9 +32,9 @@ class SkillSearchRequest(BaseModel):
 
 class SkillAnalyticalRequest(BaseModel):
     """技能分析对比请求 - 用于大模型提示词生成"""
-    text: str  # 用户输入的文本（如"你好"、技能描述、问题等）
-    job_names: List[str]  # 岗位名称数组（如["后端开发工程师"]）
-    selected_skill: Optional[str] = None  # 用户选中的技能（如"Java"）
+    userinput: str  # 用户输入的文本（如"你好"、技能描述、问题等）
+    job_name: str  # 目标岗位
+    skill_name: str  # 选中的技能
 
 class AddDocumentRequest(BaseModel):
     """添加文档请求"""
@@ -52,6 +52,14 @@ class FetchSkillKnowRequest(BaseModel):
     """获取技能知识点请求"""
     job_names: str  # 岗位名称
     selected_skill: str  # 选中的技能名称
+
+class LearningPathRequest(BaseModel):
+    """学习路径生成请求"""
+    skill_name: str
+    job_name: str
+    dimensions: List[str]
+    user_id: int
+    userinput: str
 
 class AnswerResponse(BaseModel):
     """问答响应"""
@@ -247,18 +255,18 @@ async def skill_analytical(request: SkillAnalyticalRequest):
     技能分析接口 - 为大模型提示词模板提供数据
     
     提取三个核心字段用于提示词生成：
-    - text: 用户输入的原始文本
-    - job_names: 目标岗位列表
-    - selected_skill: 用户选中的技能
+    - userinput: 用户输入的原始文本
+    - job_name: 目标岗位列表
+    - skill_name: 用户选中的技能
     
     同时返回该岗位下的所有技能列表，供大模型分析和生成学习计划
     """
     try:
         # 构建提示词模板所需的数据结构
         prompt_data = {
-            "text": request.text,                    # 用户输入文本
-            "target_jobs": request.job_names[0],        # 目标岗位
-            "selected_skill": request.selected_skill  # 选中的技能
+            "userinput": request.userinput,                    # 用户输入文本
+            "job_name": request.job_name,        # 目标岗位
+            "skill_name": request.skill_name  # 选中的技能
         }
 
         # 在调用大模型生成学习资料
@@ -271,6 +279,34 @@ async def skill_analytical(request: SkillAnalyticalRequest):
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"学习资料生成失败: {str(e)}")
+
+
+@router.post("/api/skill/learningPath")
+async def learning_path(request: LearningPathRequest):
+    """
+    学习路径生成接口
+    根据技能、岗位、知识点维度生成个性化学习路径
+    """
+    try:
+        # 构建提示词数据
+        prompt_data = {
+            "skill_name": request.skill_name,
+            "job_name": request.job_name,
+            "dimensions": request.dimensions,
+            "user_id": request.user_id,
+            "userinput": request.userinput
+        }
+
+        # 调用大模型生成学习路径
+        ai_response = ai_service.generate_learning_plan(prompt_data)
+        return {
+            "success": True,
+            "data": ai_response,
+            "message": "学习路径生成成功"
+        }
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"学习路径生成失败: {str(e)}")
 
 
 @router.post("/api/skill/fetchSkill")
@@ -315,11 +351,8 @@ async def fetch_skill_knowledge(request: FetchSkillKnowRequest):
                             return {
                                 "success": True,
                                 "skill_name": skill_name,
-                                "skill_description": skill_desc.strip(),
-                                "difficulty": difficulty_map.get(skill_name, 2),
                                 "dimensions": dimensions_list,
-                                "job_name": metadata.get("level3"),
-                                "major": metadata.get("level2")
+                                "job_name": metadata.get("level3")
                             }
 
         return {

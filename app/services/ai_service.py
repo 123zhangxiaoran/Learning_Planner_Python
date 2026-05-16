@@ -7,6 +7,7 @@ from langchain_classic.agents import AgentExecutor, create_react_agent
 
 from app.tools.quiz_tools import create_quiz_tool
 from app.tools.chat_tools import create_chat_tool
+from app.tools.ppt_tools import create_ppt_tool
 
 class AIService:
     """AI问答服务"""
@@ -47,21 +48,18 @@ class AIService:
 
         Args:
             prompt_data: 包含以下字段的字典
-                - text: 用户输入的文本
-                - target_jobs: 目标岗位
-                - selected_skill: 选中的技能
+                - userinput: 用户输入的文本
 
         Returns:
             大模型生成的学习计划
         """
-        text = prompt_data.get("text", "")
-        target_jobs = prompt_data.get("target_jobs", [])
-        selected_skill = prompt_data.get("selected_skill", "")
 
         # 创建题目生成工具
-        quiz_tool = create_quiz_tool(self.llm_generator, target_jobs, selected_skill)
+        quiz_tool = create_quiz_tool(self.llm_generator, prompt_data.get("job_name", ""), prompt_data.get("skill_name", ""))
         # 创建聊天工具
         chat_tool = create_chat_tool(self.llm_generator)
+        # 创建生成ppt学习规划工具
+        ppt_tool = create_ppt_tool(self.llm_generator, prompt_data.get("skill_name", ""), prompt_data.get("job_name", ""), prompt_data.get("dimensions", ""), prompt_data.get("user_id"))
 
         # 创建ReAct格式的prompt
         react_prompt = PromptTemplate.from_template(
@@ -113,6 +111,12 @@ class AIService:
         Thought: 用户要聊天，使用聊天工具，根据工具"parameters"提取参数：question是用户的输入
         Action: chat
         Action Input: {{"question": "用户的输入"}}
+        
+        示例6：
+        用户："帮我生成一份ppt"
+        Thought: 用户要生成ppt，使用生成ppt工具，根据工具"parameters"提取参数：没有parameters字段，不需要提取参数，直接调用工具
+        Action: generate_ppt
+        Action Input: {{}}
 
 
         {agent_scratchpad}"""
@@ -121,20 +125,20 @@ class AIService:
         # 初始化ReAct智能体
         agent = create_react_agent(
             llm=self.llm_parser,
-            tools=[quiz_tool, chat_tool],
+            tools=[quiz_tool, chat_tool, ppt_tool],
             prompt=react_prompt
         )
 
         # 创建AgentExecutor
         agent_executor = AgentExecutor(
             agent=agent,
-            tools=[quiz_tool, chat_tool],
+            tools=[quiz_tool, chat_tool, ppt_tool],
             verbose=True,
             handle_parsing_errors="""Agent stopped due to iteration limit or time limit.""",
             max_iterations=5
         )
 
         # 调用智能体
-        response = agent_executor.invoke({"input": text})
+        response = agent_executor.invoke({"input": prompt_data.get("userinput", "")})
 
         return response["output"]

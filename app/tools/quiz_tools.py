@@ -3,14 +3,14 @@ import json
 from langchain_core.tools import StructuredTool
 
 
-def create_quiz_tool(llm_generator, target_jobs: str, selected_skill: str) -> StructuredTool:
+def create_quiz_tool(llm_generator, job_name: str, skill_name: str) -> StructuredTool:
     """
     创建题目生成工具
 
     Args:
         llm_generator: 生成题目的LLM实例
-        target_jobs: 目标岗位
-        selected_skill: 选中的技能
+        job_name: 目标岗位
+        skill_name: 选中的技能
 
     Returns:
         StructuredTool: 题目生成工具
@@ -30,7 +30,7 @@ def create_quiz_tool(llm_generator, target_jobs: str, selected_skill: str) -> St
         }
         instruction = type_instructions.get(question_type)
         question_prompt = f"""你是一个题目生成机器人，只能输出JSON格式，禁止输出任何其他内容。
-角色：你是{target_jobs}的{selected_skill}教学专家
+角色：你是{job_name}的{skill_name}教学专家
 任务：请根据你的身份{instruction}
 参数：
     1.知识点：{topic}

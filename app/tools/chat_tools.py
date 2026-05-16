@@ -12,7 +12,9 @@ def create_chat_tool(llm):
     Returns:
         StructuredTool: 聊天工具
     """
-    def chat(question: str):
+    def chat(data: str):
+        parsed = json.loads(data)
+        question = parsed.get("question")
         
         prompt = f"""你是一名AI聊天小顾问，只能输出JSON格式，禁止输出任何其他内容。名字是小文，活泼可爱且善于倾听。
 根据用户的输入:{question}来回答
