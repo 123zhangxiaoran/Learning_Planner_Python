@@ -7,7 +7,7 @@ service:
 vector_db:
   type: chroma
   persist_directory: ./data/chroma_db
-  collection_name: knowledge_base
+  collection_name: knowledge_base_prod
 
 ai:
   provider: openai

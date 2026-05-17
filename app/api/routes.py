@@ -21,6 +21,7 @@ class JobSearchRequest(BaseModel):
     major: str  # 专业或就业方向
     top_k: int = 6  # 默认值6
     min_score: float = 0.1  # 最低相似度阈值，降低默认值
+    collection_name: Optional[str] = None  # 向量集合名称，默认使用配置值
 
 class SkillSearchRequest(BaseModel):
     """技能查询请求"""
@@ -29,6 +30,7 @@ class SkillSearchRequest(BaseModel):
     min_score: float = 0.3  # 最低相似度阈值
     isNews: Optional[bool] = True  # 是否新请求
     jobToken: Optional[int] = None  # 岗位令牌
+    collection_name: Optional[str] = None  # 向量集合名称
 
 class SkillAnalyticalRequest(BaseModel):
     """技能分析对比请求 - 用于大模型提示词生成"""
@@ -40,18 +42,13 @@ class AddDocumentRequest(BaseModel):
     """添加文档请求"""
     texts: List[str]
     metadatas: Optional[List[Dict[str, Any]]] = None
-
-class QuestionRequest(BaseModel):
-    """用户提问请求"""
-    question: str
-    context: Optional[Dict[str, Any]] = None
-    use_vector_search: bool = True
-    top_k: int = 5
+    collection_name: Optional[str] = None  # 向量集合名称
 
 class FetchSkillKnowRequest(BaseModel):
     """获取技能知识点请求"""
     job_names: str  # 岗位名称
     selected_skill: str  # 选中的技能名称
+    collection_name: Optional[str] = None  # 向量集合名称
 
 class LearningPathRequest(BaseModel):
     """学习路径生成请求"""
@@ -80,7 +77,8 @@ async def search_jobs(request: JobSearchRequest):
         # 向量检索（已按相似度排序）
         results = vector_service.similarity_search(
             query=request.major,
-            top_k=50  # 多取一些，后面重新排序
+            top_k=50,  # 多取一些，后面重新排序
+            collection_name=request.collection_name
         )
 
         # 提取所有需要计算相似度的文本（去掉技能，只保留专业+岗位+描述）
@@ -155,7 +153,7 @@ async def search_skills(request: SkillSearchRequest):
         all_skills = []
         
         # 精确匹配：根据岗位名称直接查询
-        results = vector_service.get_by_metadata("level3", request.jobs)
+        results = vector_service.get_by_metadata("level3", request.jobs, collection_name=request.collection_name)
         
         # 解析技能详细描述
         for r in results:
@@ -216,7 +214,8 @@ async def add_documents(request: AddDocumentRequest):
     try:
         ids = vector_service.add_documents(
             texts=request.texts,
-            metadatas=request.metadatas
+            metadatas=request.metadatas,
+            collection_name=request.collection_name
         )
         return {"success": True, "message": f"成功添加 {len(ids)} 个文档", "ids": ids}
     except Exception as e:
@@ -224,20 +223,20 @@ async def add_documents(request: AddDocumentRequest):
 
 
 @router.get("/api/collection/info")
-async def get_collection_info():
+async def get_collection_info(collection_name: str = None):
     """获取向量库信息"""
     try:
-        info = vector_service.get_collection_info()
+        info = vector_service.get_collection_info(collection_name=collection_name)
         return info
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.delete("/api/collection")
-async def delete_collection():
+async def delete_collection(collection_name: str = None):
     """清空向量库"""
     try:
-        vector_service.delete_collection()
+        vector_service.delete_collection(collection_name=collection_name)
         return {"success": True, "message": "向量库已清空"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -317,7 +316,7 @@ async def fetch_skill_knowledge(request: FetchSkillKnowRequest):
     """
     try:
         # 使用 get_by_metadata 根据岗位名称精确查询
-        results = vector_service.get_by_metadata("level3", [request.job_names])
+        results = vector_service.get_by_metadata("level3", [request.job_names], collection_name=request.collection_name)
 
         for r in results:
             metadata = r.get("metadata", {})

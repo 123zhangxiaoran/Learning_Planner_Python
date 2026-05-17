@@ -26,12 +26,22 @@ class VectorService:
         # 初始化嵌入模型
         self._init_embeddings()
         
-        # 获取或创建collection
-        collection_name = self.vector_config.get("collection_name", "knowledge_base")
-        self.collection = self.client.get_or_create_collection(
-            name=collection_name,
-            metadata={"description": "知识库向量存储"}
-        )
+        # 缓存所有集合
+        self.collections = {}
+        
+        # 获取或创建默认collection
+        self.default_collection_name = self.vector_config.get("collection_name", "knowledge_base")
+        self.collection = self._get_or_create_collection(self.default_collection_name)
+    
+    def _get_or_create_collection(self, name: str = None) -> chromadb.Collection:
+        """获取或创建指定名称的集合"""
+        name = name or self.default_collection_name
+        if name not in self.collections:
+            self.collections[name] = self.client.get_or_create_collection(
+                name=name,
+                metadata={"description": f"知识库向量存储 - {name}"}
+            )
+        return self.collections[name]
     
     def _init_embeddings(self):
         """初始化嵌入模型"""
@@ -47,16 +57,18 @@ class VectorService:
         else:
             raise ValueError(f"不支持的嵌入provider: {provider}")
     
-    def add_documents(self, texts: List[str], metadatas: Optional[List[Dict]] = None, ids: Optional[List[str]] = None) -> List[str]:
+    def add_documents(self, texts: List[str], metadatas: Optional[List[Dict]] = None, ids: Optional[List[str]] = None, collection_name: str = None) -> List[str]:
         """添加文档到向量库"""
         if ids is None:
             ids = [str(i) for i in range(len(texts))]
+        
+        collection = self._get_or_create_collection(collection_name)
         
         # 生成嵌入向量
         embeddings = self.embeddings.embed_documents(texts)
         
         # 添加到Chroma
-        self.collection.add(
+        collection.add(
             documents=texts,
             embeddings=embeddings,
             metadatas=metadatas,
@@ -65,13 +77,15 @@ class VectorService:
         
         return ids
     
-    def similarity_search(self, query: str, top_k: int = 5) -> List[Dict[str, Any]]:
+    def similarity_search(self, query: str, top_k: int = 5, collection_name: str = None) -> List[Dict[str, Any]]:
         """相似度搜索"""
+        collection = self._get_or_create_collection(collection_name)
+        
         # 生成查询向量
         query_embedding = self.embeddings.embed_query(query)
         
         # 执行搜索
-        results = self.collection.query(
+        results = collection.query(
             query_embeddings=[query_embedding],
             n_results=top_k
         )
@@ -89,34 +103,36 @@ class VectorService:
         
         return formatted_results
     
-    def delete_collection(self):
+    def delete_collection(self, collection_name: str = None):
         """删除collection"""
-        self.client.delete_collection(self.collection.name)
+        name = collection_name or self.default_collection_name
+        self.client.delete_collection(name)
+        # 从缓存中移除
+        self.collections.pop(name, None)
         # 重新创建collection
-        collection_name = self.vector_config.get("collection_name", "knowledge_base")
-        self.collection = self.client.get_or_create_collection(
-            name=collection_name,
-            metadata={"description": "知识库向量存储"}
-        )
+        self._get_or_create_collection(name)
     
-    def get_collection_info(self) -> Dict[str, Any]:
+    def get_collection_info(self, collection_name: str = None) -> Dict[str, Any]:
         """获取collection信息"""
+        collection = self._get_or_create_collection(collection_name)
         return {
-            "name": self.collection.name,
-            "count": self.collection.count(),
-            "metadata": self.collection.metadata
+            "name": collection.name,
+            "count": collection.count(),
+            "metadata": collection.metadata
         }
     
-    def get_by_metadata(self, field: str, values: List[str]) -> List[Dict[str, Any]]:
+    def get_by_metadata(self, field: str, values: List[str], collection_name: str = None) -> List[Dict[str, Any]]:
         """根据metadata字段精确匹配查询"""
+        collection = self._get_or_create_collection(collection_name)
+        
         if len(values) == 1:
             # 单个值直接查询
-            results = self.collection.get(
+            results = collection.get(
                 where={field: values[0]}
             )
         else:
             # 多个值用 $or 查询
-            results = self.collection.get(
+            results = collection.get(
                 where={"$or": [{field: v} for v in values]}
             )
         
