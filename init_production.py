@@ -2,6 +2,7 @@ import requests
 import importlib
 import pkgutil
 import os
+import json
 
 # 导入 data 目录下所有数据模块
 data_dir = os.path.join(os.path.dirname(__file__), 'data')
@@ -44,8 +45,7 @@ for data in data_modules:
                     skills_with_desc.append(f"{skill_name}:{skill_info['desc']}")
                     skills_with_difficulty.append(f"{skill_name}({skill_info['difficulty']})")
                     if 'dimensions' in skill_info:
-                        flat_dims = [item for group in skill_info['dimensions'] for item in group]
-                        skills_dimensions[f"skill_dims_{skill_name}"] = '; '.join(flat_dims)
+                        skills_dimensions[f"skill_dims_{skill_name}"] = json.dumps(skill_info['dimensions'], ensure_ascii=False)
 
                 text = f"专业：{level1} | 方向：{major} | 岗位：{job} | 描述：{info['description']} | 技能：{', '.join(skills_list)}"
                 texts.append(text)

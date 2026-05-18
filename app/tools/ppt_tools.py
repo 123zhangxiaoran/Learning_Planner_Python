@@ -160,7 +160,7 @@ PAGE_THEMES = [
 LAYOUTS = [1, 3, 7]
 
 
-def create_ppt_tool(llm_generator, skill_name: str, job_name: str, dimensions: list[str], user_id: int) -> StructuredTool:
+def create_ppt_tool(llm_generator, skill_name: str, job_name: str, dimensions: list[list[str]], user_id: int) -> StructuredTool:
     """创建PPT生成工具"""
 
     def generate_ppt():
@@ -193,7 +193,7 @@ def create_ppt_tool(llm_generator, skill_name: str, job_name: str, dimensions: l
         for i, dim in enumerate(dimensions):
             bg_color, accent = PAGE_THEMES[i % len(PAGE_THEMES)]
             layout_style = LAYOUTS[i % len(LAYOUTS)]
-            slide = prs.slides.add_slide(prs.slide_layouts[5])  # 空白布局
+            slide = prs.slides.add_slide(prs.slide_layouts[6])  # 空白布局
             _set_slide_bg(slide, bg_color)
 
             # 顶部装饰细线
@@ -220,19 +220,11 @@ def create_ppt_tool(llm_generator, skill_name: str, job_name: str, dimensions: l
                 tf = tx_title.text_frame
                 tf.word_wrap = True
                 p = tf.paragraphs[0]
-                p.text = dim
+                p.text = dim[0]
                 p.font.size = Pt(22)
+                p.font.bold = True
                 p.font.color.rgb = DARK_TEXT
                 p.alignment = PP_ALIGN.CENTER
-
-                tx_sub = slide.shapes.add_textbox(Inches(1.5), Inches(3.0), Inches(7), Inches(2))
-                tf2 = tx_sub.text_frame
-                tf2.word_wrap = True
-                p2 = tf2.paragraphs[0]
-                p2.text = "（请在此处填写具体学习内容）"
-                p2.font.size = Pt(14)
-                p2.font.color.rgb = accent
-                p2.alignment = PP_ALIGN.CENTER
 
             elif layout_style == 3:
                 # 左右布局：标题居中偏上，左侧文字、右侧装饰
@@ -240,20 +232,11 @@ def create_ppt_tool(llm_generator, skill_name: str, job_name: str, dimensions: l
                 tf = tx_title.text_frame
                 tf.word_wrap = True
                 p = tf.paragraphs[0]
-                p.text = dim
+                p.text = dim[0]
                 p.font.size = Pt(22)
+                p.font.bold = True
                 p.font.color.rgb = DARK_TEXT
                 p.alignment = PP_ALIGN.CENTER
-
-                # 左侧文字
-                tx_left = slide.shapes.add_textbox(Inches(0.5), Inches(2.8), Inches(4), Inches(2))
-                tf2 = tx_left.text_frame
-                tf2.word_wrap = True
-                p2 = tf2.paragraphs[0]
-                p2.text = "学习要点"
-                p2.font.size = Pt(14)
-                p2.font.color.rgb = accent
-                p2.alignment = PP_ALIGN.CENTER
 
                 # 右侧装饰圆环
                 ring = _add_shape(slide, MSO_SHAPE.OVAL,
@@ -269,14 +252,14 @@ def create_ppt_tool(llm_generator, skill_name: str, job_name: str, dimensions: l
                 tf = tx_title.text_frame
                 tf.word_wrap = True
                 p = tf.paragraphs[0]
-                p.text = dim
+                p.text = dim[0]
                 p.font.size = Pt(26)
                 p.font.color.rgb = DARK_TEXT
                 p.alignment = PP_ALIGN.CENTER
                 tf.paragraphs[0].alignment = PP_ALIGN.CENTER
 
         # ==================== 3. 结尾页 ====================
-        slide = prs.slides.add_slide(prs.slide_layouts[5])
+        slide = prs.slides.add_slide(prs.slide_layouts[6])
         _set_slide_bg(slide, DARK_BG)
 
         # 底部装饰：打开的书+树
@@ -307,7 +290,10 @@ def create_ppt_tool(llm_generator, skill_name: str, job_name: str, dimensions: l
         prs.save(ppt_stream)
         ppt_stream.seek(0)
         ppt_base64 = base64.b64encode(ppt_stream.getvalue()).decode("utf-8")
-        return ppt_base64
+        return {
+            "data": ppt_base64,
+            "tool": "generate_ppt"
+        }
 
     return StructuredTool.from_function(
         func=generate_ppt,

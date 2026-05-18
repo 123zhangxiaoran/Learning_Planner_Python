@@ -1,4 +1,5 @@
 """API路由"""
+import json
 from typing import Dict, Any, Optional, List, Union
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
@@ -54,7 +55,7 @@ class LearningPathRequest(BaseModel):
     """学习路径生成请求"""
     skill_name: str
     job_name: str
-    dimensions: List[str]
+    dimensions: List[List[str]]
     user_id: int
     userinput: str
 
@@ -345,7 +346,11 @@ async def fetch_skill_knowledge(request: FetchSkillKnowRequest):
                             # 从 metadata 中获取该技能的知识点
                             dim_key = f"skill_dims_{skill_name}"
                             dimensions_str = metadata.get(dim_key, "")
-                            dimensions_list = [d.strip() for d in dimensions_str.split('; ')] if dimensions_str else []
+                            try:
+                                dimensions_list = json.loads(dimensions_str) if dimensions_str else []
+                            except json.JSONDecodeError:
+                                # 兼容旧格式：; 分隔的字符串
+                                dimensions_list = [d.strip() for d in dimensions_str.split('; ')] if dimensions_str else []
 
                             return {
                                 "success": True,
