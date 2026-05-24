@@ -38,6 +38,8 @@ class SkillAnalyticalRequest(BaseModel):
     userinput: str  # 用户输入的文本（如"你好"、技能描述、问题等）
     job_name: str  # 目标岗位
     skill_name: str  # 选中的技能
+    dimensions: List[List[str]]  # 知识点维度
+    user_id: int
 
 class AddDocumentRequest(BaseModel):
     """添加文档请求"""
@@ -264,9 +266,11 @@ async def skill_analytical(request: SkillAnalyticalRequest):
     try:
         # 构建提示词模板所需的数据结构
         prompt_data = {
+            "user_id": request.user_id,
             "userinput": request.userinput,                    # 用户输入文本
             "job_name": request.job_name,        # 目标岗位
-            "skill_name": request.skill_name  # 选中的技能
+            "skill_name": request.skill_name,  # 选中的技能
+            "dimensions":request.dimensions
         }
 
         # 在调用大模型生成学习资料

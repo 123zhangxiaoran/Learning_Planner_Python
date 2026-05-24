@@ -29,7 +29,7 @@ class AIService:
             api_key=api_key,
             model="qwen-plus",
             temperature=self.ai_config.get("temperature", 0.7),
-            max_tokens=self.ai_config.get("max_tokens", 2000),
+            max_tokens=self.ai_config.get("max_tokens", 5000),
             base_url="https://dashscope.aliyuncs.com/compatible-mode/v1"
         )
         
@@ -38,7 +38,7 @@ class AIService:
             api_key=api_key,
             model="qwen-plus",
             temperature=self.ai_config.get("temperature", 0),
-            max_tokens=self.ai_config.get("max_tokens", 2000),
+            max_tokens=self.ai_config.get("max_tokens", 5000),
             base_url="https://dashscope.aliyuncs.com/compatible-mode/v1"
         )
 
