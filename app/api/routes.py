@@ -61,6 +61,13 @@ class LearningPathRequest(BaseModel):
     user_id: int
     userinput: str
 
+class GenerateQuestionsRequest(BaseModel):
+    """生成题目请求 - AnalyticalSkillDTO"""
+    skill_name: str  # 技能名称（如 HTML）
+    job_name: str  # 岗位名称（如 前端开发工程师）
+    user_id: int
+    dimensions: List[List[str]]  # 知识点维度列表
+
 class AnswerResponse(BaseModel):
     """问答响应"""
     answer: str
@@ -370,3 +377,36 @@ async def fetch_skill_knowledge(request: FetchSkillKnowRequest):
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"获取技能知识点失败: {str(e)}")
+
+
+@router.post("/api/skill/generateQuestions")
+async def generate_questions(request: GenerateQuestionsRequest):
+    """
+    生成题目接口 - 基于知识点维度生成练习题目
+    
+    参数：
+    - skill_name: 技能名称（如 HTML）
+    - job_name: 岗位名称（如 前端开发工程师）
+    - user_id: 用户ID
+    - dimensions: 知识点维度列表
+    """
+    try:
+        # 构建提示词数据
+        prompt_data = {
+            "skill_name": request.skill_name,
+            "job_name": request.job_name,
+            "dimensions": request.dimensions,
+            "user_id": request.user_id,
+            "task": "generate_questions"
+        }
+
+        # 调用大模型生成题目
+        ai_response = ai_service.generate_learning_plan(prompt_data)
+        return {
+            "success": True,
+            "data": ai_response,
+            "message": "题目生成成功"
+        }
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"题目生成失败: {str(e)}")

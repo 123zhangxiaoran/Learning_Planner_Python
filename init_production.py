@@ -3,16 +3,24 @@ import importlib
 import pkgutil
 import os
 import json
+import glob
 
-# 导入 data 目录下所有数据模块
+# 导入 data 目录下所有数据模块（递归遍历所有子目录）
 data_dir = os.path.join(os.path.dirname(__file__), 'data')
 data_modules = []
 
-for importer, modname, ispkg in pkgutil.iter_modules([data_dir]):
-    if modname != '__init__' and not modname.startswith('_'):
-        mod = importlib.import_module(f'data.{modname}')
-        if hasattr(mod, 'data'):
-            data_modules.append(mod.data)
+# 递归查找所有 .py 文件，排除 __init__.py
+for pyfile in glob.glob(os.path.join(data_dir, '**/*.py'), recursive=True):
+    if '__init__' in pyfile or '__pycache__' in pyfile:
+        continue
+    
+    # 计算模块路径，例如 data.software_engineering.backend
+    rel_path = os.path.relpath(pyfile, os.path.dirname(data_dir))
+    module_path = rel_path.replace(os.sep, '.').replace('.py', '')
+    
+    mod = importlib.import_module(module_path)
+    if hasattr(mod, 'data'):
+        data_modules.append(mod.data)
 
 if not data_modules:
     print("未在 data/ 目录下找到任何数据模块")

@@ -1,5 +1,6 @@
 """AI问答服务"""
 import os
+import json
 from typing import Dict, Any
 from langchain_openai import ChatOpenAI
 from langchain_core.prompts import PromptTemplate
@@ -8,6 +9,7 @@ from langchain_classic.agents import AgentExecutor, create_react_agent
 from app.tools.quiz_tools import create_quiz_tool
 from app.tools.chat_tools import create_chat_tool
 from app.tools.ppt_tools import create_ppt_tool
+from app.services.question_service import QuestionService
 
 class AIService:
     """AI问答服务"""
@@ -49,10 +51,25 @@ class AIService:
         Args:
             prompt_data: 包含以下字段的字典
                 - userinput: 用户输入的文本
+                - task: 任务类型（可选，如 "generate_questions" 表示直接出题）
 
         Returns:
             大模型生成的学习计划
         """
+
+        # 检查是否为专门的题目生成任务
+        task_type = prompt_data.get("task", "")
+        if task_type == "generate_questions":
+            # 使用 QuestionService 生成题目
+            question_service = QuestionService(
+                self.llm_generator,
+                prompt_data.get("job_name", ""),
+                prompt_data.get("skill_name", "")
+            )
+            return question_service.generate_questions(
+                prompt_data.get("dimensions", []),
+                prompt_data.get("user_id", 1)
+            )
 
         # 创建题目生成工具
         quiz_tool = create_quiz_tool(self.llm_generator, prompt_data.get("job_name", ""), prompt_data.get("skill_name", ""))
