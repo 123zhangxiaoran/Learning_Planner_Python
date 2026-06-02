@@ -7,6 +7,7 @@ from pydantic import BaseModel
 # 导入服务
 from app.services.vector_service import VectorService
 from app.services.ai_service import AIService
+from app.services.question_service import QuestionService
 from app import config
 
 # 初始化服务
@@ -383,7 +384,7 @@ async def fetch_skill_knowledge(request: FetchSkillKnowRequest):
 async def generate_questions(request: GenerateQuestionsRequest):
     """
     生成题目接口 - 基于知识点维度生成练习题目
-    
+
     参数：
     - skill_name: 技能名称（如 HTML）
     - job_name: 岗位名称（如 前端开发工程师）
@@ -391,21 +392,25 @@ async def generate_questions(request: GenerateQuestionsRequest):
     - dimensions: 知识点维度列表
     """
     try:
-        # 构建提示词数据
-        prompt_data = {
-            "skill_name": request.skill_name,
-            "job_name": request.job_name,
-            "dimensions": request.dimensions,
-            "user_id": request.user_id,
-            "task": "generate_questions"
-        }
+        # 创建 QuestionService 实例，传入 vector_service
+        llm = ai_service.llm_generator
+        question_service = QuestionService(
+            llm_generator=llm,
+            job_name=request.job_name,
+            skill_name=request.skill_name,
+            vector_service=vector_service
+        )
 
-        # 调用大模型生成题目
-        ai_response = ai_service.generate_learning_plan(prompt_data)
+        # 调用生成题目方法
+        questions = question_service.generate_questions(
+            dimensions=request.dimensions,
+            user_id=request.user_id
+        )
+
         return {
             "success": True,
-            "data": ai_response,
-            "message": "题目生成成功"
+            "data": questions,
+            "message": f"成功生成 {len(questions)} 道题目"
         }
 
     except Exception as e:

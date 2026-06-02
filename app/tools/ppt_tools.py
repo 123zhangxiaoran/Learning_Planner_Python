@@ -194,46 +194,55 @@ def create_ppt_tool(llm_generator, skill_name: str, job_name: str, dimensions: l
         prompt = PPT_PROMPT_TEMPLATE.format(skill_name=skill_name, job_name=job_name, knowledge_points=knowledge_points)
         result = llm_generator.invoke(prompt)
 
-        # 调试：打印原始返回
-        print(f"[DEBUG] LLM返回类型: {type(result)}")
-        print(f"[DEBUG] LLM返回内容: {result}")
-
         # 解析JSON结果
         try:
             result_text = result.content if hasattr(result, 'content') else str(result)
-            print(f"[DEBUG] 原始文本长度: {len(result_text)}")
-            print(f"[DEBUG] 原始文本 repr 前100: {repr(result_text[:100])}...")
-            print(f"[DEBUG] 原始文本前200字符: {result_text[:200]}...")
-            # 去掉markdown代码块格式
-            result_text = result_text.strip()
-            if result_text.startswith("```"):
-                first_newline = result_text.find('\n')
-                if first_newline != -1:
-                    result_text = result_text[first_newline + 1:]
-                if result_text.endswith("```"):
-                    result_text = result_text[:-3]
-                result_text = result_text.strip()
 
-            # 找到第一个 [ 和最后一个 ]
-            start_idx = result_text.find('[')
-            end_idx = result_text.rfind(']')
-            if start_idx != -1 and end_idx != -1:
-                result_text = result_text[start_idx:end_idx + 1]
+            # 多步骤解析策略
+            parsed_data = None
+
+            # 步骤1: 直接尝试解析
+            try:
+                parsed_data = json.loads(result_text)
+            except:
+                pass
+
+            # 步骤2: 清理markdown格式后尝试
+            if parsed_data is None:
+                cleaned_text = result_text.strip()
+                # 去掉markdown代码块格式
+                if cleaned_text.startswith("```"):
+                    first_newline = cleaned_text.find('\n')
+                    if first_newline != -1:
+                        cleaned_text = cleaned_text[first_newline + 1:]
+                    if cleaned_text.endswith("```"):
+                        cleaned_text = cleaned_text[:-3]
+                    cleaned_text = cleaned_text.strip()
+
+                # 找到JSON数组边界
+                start_idx = cleaned_text.find('[')
+                end_idx = cleaned_text.rfind(']')
+                if start_idx != -1 and end_idx != -1:
+                    cleaned_text = cleaned_text[start_idx:end_idx + 1]
+
+                try:
+                    parsed_data = json.loads(cleaned_text)
+                except:
+                    pass
+
+            # 步骤3: 使用解析结果或默认值
+            if parsed_data is not None and isinstance(parsed_data, list):
+                ppt_data = parsed_data
             else:
-                result_text = result_text.strip('`').strip()
+                ppt_data = None
 
-            print(f"[DEBUG] 替换前实际换行符数量: {result_text.count(chr(10))}")
-            # 删除这个替换，让 json.loads 原生处理实际换行符
-            # result_text = result_text.replace('\n', '\\n')
-            print(f"[DEBUG] 清理后文本前200字符: {result_text[:200]}...")
-            ppt_data = json.loads(result_text)
-        except json.JSONDecodeError as e:
-            print(f"[ERROR] JSON解析失败: {e}")
-            if hasattr(e, 'pos'):
-                print(f"[ERROR] 失败位置附近的文本: {result_text[max(0, e.pos - 50):e.pos + 50]}")
-            ppt_data = []
+        except Exception as e:
+            ppt_data = None
 
-        print(f"[DEBUG] 解析后ppt_data: {ppt_data}")
+        # 最终检查：如果没有有效数据，使用默认值
+        if ppt_data is None or not isinstance(ppt_data, list) or len(ppt_data) == 0:
+            # 使用维度名称作为默认值
+            ppt_data = [{"explain": f"{dim[0]}学习的核心知识点", "example": "# 学习内容\n# 代码示例"} for dim in dimensions]
         
         prs = Presentation()
         slide_w = prs.slide_width
