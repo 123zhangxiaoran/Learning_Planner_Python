@@ -29,7 +29,7 @@ class AIService:
         # 分析模型
         self.llm_generator = ChatOpenAI(
             api_key=api_key,
-            model="qwen-plus",
+            model="qwen3.6-plus",
             temperature=self.ai_config.get("temperature", 0.7),
             max_tokens=self.ai_config.get("max_tokens", 5000),
             base_url="https://dashscope.aliyuncs.com/compatible-mode/v1"
@@ -38,7 +38,7 @@ class AIService:
         # 提取模型
         self.llm_parser = ChatOpenAI(
             api_key=api_key,
-            model="qwen-plus",
+            model="qwen3.6-plus",
             temperature=self.ai_config.get("temperature", 0),
             max_tokens=self.ai_config.get("max_tokens", 5000),
             base_url="https://dashscope.aliyuncs.com/compatible-mode/v1"

@@ -8,10 +8,14 @@ vector_db:
   type: chroma
   persist_directory: ./data/chroma_db
   collection_name: knowledge_base_prod
+  # 题目库集合配置
+  question_collections:
+    master: generated_questions_master  # 主库：所有用户题目
+    user_prefix: generated_questions_user  # 子库前缀：每个用户单独库
 
 ai:
-  provider: openai
-  model: gpt-3.5-turbo
+  provider: dashscope
+  model: qwen3.6-plus
   temperature: 0.7
   max_tokens: 5000
 

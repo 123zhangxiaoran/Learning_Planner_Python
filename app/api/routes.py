@@ -143,9 +143,17 @@ async def search_jobs(request: JobSearchRequest):
         # 按相似度重新排序
         jobs.sort(key=lambda x: x["similarity"], reverse=True)
 
+        # 过滤掉重复的岗位（按岗位名称去重，保留相似度最高的）
+        seen = set()
+        unique_jobs = []
+        for j in jobs:
+            if j["job_name"] not in seen:
+                seen.add(j["job_name"])
+                unique_jobs.append(j)
+        jobs = unique_jobs
+
         # 过滤掉相似度低于60%的结果
         jobs = [j for j in jobs if j["similarity"] >= 60]
-
         return {
             "jobs": jobs[:6]  # 返回top 6
         }

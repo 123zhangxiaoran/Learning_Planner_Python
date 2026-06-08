@@ -122,7 +122,7 @@ class VectorService:
         }
     
     def get_by_metadata(self, field: str, values: List[str], collection_name: str = None) -> List[Dict[str, Any]]:
-        """根据metadata字段精确匹配查询"""
+        """根据metadata字段精确匹配查询（单字段）"""
         collection = self._get_or_create_collection(collection_name)
         
         if len(values) == 1:
@@ -136,6 +136,18 @@ class VectorService:
                 where={"$or": [{field: v} for v in values]}
             )
         
+        return self._format_results(results)
+
+    def get_by_metadata_multi(self, filters: Dict[str, Any], collection_name: str = None) -> List[Dict[str, Any]]:
+        """根据多个metadata字段精确匹配查询（$and）"""
+        collection = self._get_or_create_collection(collection_name)
+        where_clause = {"$and": [{k: v} for k, v in filters.items()]}
+        results = collection.get(where=where_clause)
+        return self._format_results(results)
+
+    @staticmethod
+    def _format_results(results) -> List[Dict[str, Any]]:
+        """统一格式化查询结果"""
         formatted_results = []
         if results["documents"]:
             for i, doc in enumerate(results["documents"]):
@@ -144,7 +156,6 @@ class VectorService:
                     "metadata": results["metadatas"][i] if results["metadatas"] else None,
                     "id": results["ids"][i] if results["ids"] else None
                 })
-        
         return formatted_results
 
     def compute_similarity(self, query: str, text: str) -> float:
