@@ -1,6 +1,11 @@
 """题目生成服务"""
 import json
-from typing import Dict, Any, List
+import logging
+import re
+from typing import Dict, Any, List, Optional
+
+
+logger = logging.getLogger(__name__)
 
 
 class QuestionService:
@@ -109,8 +114,9 @@ class QuestionService:
                             prompt = self._build_question_prompt(topic, [], q_type, keyword, dim_first)
                             result = self.llm_generator.invoke(prompt)
                             content = result.content if hasattr(result, 'content') else str(result)
-                            question_obj = json.loads(content)
-                            new_questions.append((keyword, question_obj))
+                            question_obj = self._parse_json_response(content, keyword)
+                            if question_obj:
+                                new_questions.append((keyword, question_obj))
                     else:
                         # ---- 子库有数据 ----
                         # 当前 keyword 在子库中可能有多道题，收集所有 stem
@@ -128,8 +134,9 @@ class QuestionService:
                             prompt = self._build_question_prompt(topic, all_existing_stems[:10], q_type, keyword, dim_first)
                             result = self.llm_generator.invoke(prompt)
                             content = result.content if hasattr(result, 'content') else str(result)
-                            question_obj = json.loads(content)
-                            new_questions.append((keyword, question_obj))
+                            question_obj = self._parse_json_response(content, keyword)
+                            if question_obj:
+                                new_questions.append((keyword, question_obj))
                         else:
                             # 查主库所有同岗位+同技能的向量
                             master_all = self.vector_service.get_by_metadata_multi(
@@ -166,16 +173,18 @@ class QuestionService:
                                 prompt = self._build_question_prompt(topic, [], q_type, keyword, dim_first)
                                 result = self.llm_generator.invoke(prompt)
                                 content = result.content if hasattr(result, 'content') else str(result)
-                                question_obj = json.loads(content)
-                                new_questions.append((keyword, question_obj))
+                                question_obj = self._parse_json_response(content, keyword)
+                                if question_obj:
+                                    new_questions.append((keyword, question_obj))
 
                 except Exception:
                     # 异常时降级：大模型出题
                     prompt = self._build_question_prompt(topic, [], q_type, keyword, dim_first)
                     result = self.llm_generator.invoke(prompt)
                     content = result.content if hasattr(result, 'content') else str(result)
-                    question_obj = json.loads(content)
-                    new_questions.append((keyword, question_obj))
+                    question_obj = self._parse_json_response(content, keyword)
+                    if question_obj:
+                        new_questions.append((keyword, question_obj))
 
             if question_obj:
                 all_questions.append(question_obj)
@@ -206,7 +215,7 @@ class QuestionService:
                         "original_json": json.dumps(q, ensure_ascii=False)
                     }
                     metadatas.append(metadata)
-                    ids.append(f"q_{user_id}_{batch_id}_{keyword}")
+                    ids.append(f"q_{user_id}_{batch_id}_{keyword}_{idx}")
                 return texts, metadatas, ids
 
             def _build_master_docs(items):
@@ -226,7 +235,7 @@ class QuestionService:
                         "original_json": json.dumps(q, ensure_ascii=False)
                     }
                     metadatas.append(metadata)
-                    ids.append(f"q_{batch_id}_{keyword}")
+                    ids.append(f"q_{batch_id}_{keyword}_{idx}")
                 return texts, metadatas, ids
 
             # 新生成的题 → 写子库 + 主库
@@ -242,6 +251,62 @@ class QuestionService:
                 self.vector_service.add_documents(texts=texts, metadatas=metadatas, ids=ids, collection_name=user_collection_name)
 
         return all_questions
+
+    def _parse_json_response(self, content: str, keyword: str = "") -> Optional[Dict]:
+        """
+        安全解析 LLM 返回的 JSON 响应
+
+        Args:
+            content: LLM 返回的原始内容
+            keyword: 关键词（用于日志）
+
+        Returns:
+            解析后的 JSON 对象，解析失败返回 None
+        """
+        if not content or not content.strip():
+            logger.error(f"[QuestionService] LLM 返回空内容，keyword={keyword}")
+            return None
+
+        # 尝试直接解析
+        try:
+            return json.loads(content)
+        except json.JSONDecodeError:
+            pass
+
+        # 尝试提取 JSON 代码块
+        json_patterns = [
+            r'```json\s*([\s\S]*?)\s*```',  # ```json ... ```
+            r'```\s*([\s\S]*?)\s*```',       # ``` ... ```
+            r'\{[\s\S]*\}',                  # 任意 {...} 块
+        ]
+
+        for pattern in json_patterns:
+            match = re.search(pattern, content)
+            if match:
+                try:
+                    json_str = match.group(1) if match.lastindex else match.group(0)
+                    # 如果匹配到的是整个内容块，提取其中的 JSON
+                    if match.lastindex and '{' not in match.group(1)[:10]:
+                        continue
+                    result = json.loads(json_str)
+                    logger.info(f"[QuestionService] 通过正则提取 JSON 成功，keyword={keyword}")
+                    return result
+                except (json.JSONDecodeError, IndexError):
+                    continue
+
+        # 尝试清理内容后解析
+        cleaned = content.strip()
+        # 移除 markdown 代码块标记
+        cleaned = re.sub(r'^```json\s*', '', cleaned)
+        cleaned = re.sub(r'^```\s*', '', cleaned)
+        cleaned = re.sub(r'\s*```$', '', cleaned)
+        cleaned = cleaned.strip()
+
+        try:
+            return json.loads(cleaned)
+        except json.JSONDecodeError:
+            logger.error(f"[QuestionService] JSON 解析失败，keyword={keyword}, content={content[:200]}...")
+            return None
 
     def _build_question_prompt(self, topic: str, existing_questions: List[str] = None, q_type: str = "choice", output_keyword: str = "", dimension_summary: str = "") -> str:
         """

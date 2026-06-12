@@ -1,4 +1,5 @@
 """API路由"""
+import asyncio
 import json
 from typing import Dict, Any, Optional, List, Union
 from fastapi import APIRouter, HTTPException, Query
@@ -289,8 +290,10 @@ async def skill_analytical(request: SkillAnalyticalRequest):
             "dimensions":request.dimensions
         }
 
-        # 在调用大模型生成学习资料
-        ai_response = ai_service.generate_learning_plan(prompt_data)
+        # 使用线程池执行，不阻塞其他用户请求
+        ai_response = await asyncio.to_thread(
+            ai_service.generate_learning_plan, prompt_data
+        )
         return {
             "success": True,
             "data": ai_response,
@@ -317,8 +320,10 @@ async def learning_path(request: LearningPathRequest):
             "userinput": request.userinput
         }
 
-        # 调用大模型生成学习路径
-        ai_response = ai_service.generate_learning_plan(prompt_data)
+        # 使用线程池执行，不阻塞其他用户请求
+        ai_response = await asyncio.to_thread(
+            ai_service.generate_learning_plan, prompt_data
+        )
         return {
             "success": True,
             "data": ai_response,
@@ -409,8 +414,9 @@ async def generate_questions(request: GenerateQuestionsRequest):
             vector_service=vector_service
         )
 
-        # 调用生成题目方法
-        questions = question_service.generate_questions(
+        # 使用线程池并行执行，不阻塞其他用户请求
+        questions = await asyncio.to_thread(
+            question_service.generate_questions,
             dimensions=request.dimensions,
             user_id=request.user_id
         )
