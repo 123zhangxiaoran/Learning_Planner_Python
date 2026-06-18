@@ -167,21 +167,49 @@ class VectorService:
         query_embedding = self.embeddings.embed_query(query)
         text_embedding = self.embeddings.embed_query(text)
 
-        # 计算余弦相似度
-        import numpy as np
-        query_vec = np.array(query_embedding)
-        text_vec = np.array(text_embedding)
+        return self._cosine_similarity(query_embedding, text_embedding)
 
-        # 余弦相似度公式
-        dot_product = np.dot(query_vec, text_vec)
-        norm_query = np.linalg.norm(query_vec)
-        norm_text = np.linalg.norm(text_vec)
+    def compute_embedding(self, text: str) -> list:
+        """计算文本的嵌入向量"""
+        return self.embeddings.embed_query(text)
 
-        if norm_query == 0 or norm_text == 0:
+    async def compute_embedding_async(self, text: str) -> list:
+        """异步计算文本的嵌入向量（避免阻塞）"""
+        import asyncio
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(None, self.embeddings.embed_query, text)
+
+    async def compute_embeddings_batch_async(self, texts: list) -> list:
+        """异步批量计算嵌入向量（一次性提交，避免多次HTTP请求阻塞）"""
+        import asyncio
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(None, self.embeddings.embed_documents, texts)
+
+    @staticmethod
+    def cosine_similarity_from_vectors(vec1_str: str, vec2_str: str) -> float:
+        """从JSON序列化的向量字符串直接计算余弦相似度（纯数学运算，不调模型）"""
+        if not vec1_str or not vec2_str:
+            return 0.0
+        import json
+        try:
+            vec1 = json.loads(vec1_str)
+            vec2 = json.loads(vec2_str)
+            return VectorService._cosine_similarity(vec1, vec2)
+        except (json.JSONDecodeError, TypeError):
             return 0.0
 
-        similarity = dot_product / (norm_query * norm_text)
-        return float(max(0, min(1, similarity)))
+    @staticmethod
+    def _cosine_similarity(vec1: list, vec2: list) -> float:
+        """计算两个向量的余弦相似度（纯数学运算）"""
+        import numpy as np
+        v1 = np.array(vec1)
+        v2 = np.array(vec2)
+        dot = np.dot(v1, v2)
+        n1 = np.linalg.norm(v1)
+        n2 = np.linalg.norm(v2)
+        if n1 == 0 or n2 == 0:
+            return 0.0
+        return float(max(0, min(1, dot / (n1 * n2))))
 
     def compute_similarities_batch(self, query: str, texts: List[str]) -> List[float]:
         """批量计算多个文本与查询的相似度（并行优化）"""

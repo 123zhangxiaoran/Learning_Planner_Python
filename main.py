@@ -1,6 +1,13 @@
 """AI问答后端服务启动入口"""
 import os
 import sys
+import logging
+
+# 配置日志 - 关闭 INFO 输出，只显示 WARNING 及以上
+logging.basicConfig(
+    level=logging.WARNING,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
 
 # 添加项目根目录到Python路径
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))

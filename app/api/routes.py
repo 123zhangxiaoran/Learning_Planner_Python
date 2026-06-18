@@ -1,6 +1,7 @@
 """API路由"""
 import asyncio
 import json
+import random
 from typing import Dict, Any, Optional, List, Union
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
@@ -414,18 +415,125 @@ async def generate_questions(request: GenerateQuestionsRequest):
             vector_service=vector_service
         )
 
-        # 使用线程池并行执行，不阻塞其他用户请求
-        questions = await asyncio.to_thread(
-            question_service.generate_questions,
-            dimensions=request.dimensions,
-            user_id=request.user_id
-        )
+        # ========== 知识点采样逻辑（从 dimensions 采样至少10个） ==========
+        all_keywords = []
+        dim_count = len(request.dimensions)
 
-        return {
+        if dim_count >= 10:
+            for dim_group in request.dimensions:
+                if dim_group:
+                    all_keywords.append(random.choice(dim_group))
+        else:
+            pool = [kw for dim_group in request.dimensions for kw in dim_group]
+            all_keywords = [random.choice(dg) for dg in request.dimensions if dg]
+            remaining = [kw for kw in pool if kw not in all_keywords]
+            need = 10 - len(all_keywords)
+            if need > 0 and remaining:
+                extra = random.sample(remaining, min(need, len(remaining)))
+                all_keywords.extend(extra)
+
+        while len(all_keywords) < 10:
+            candidates = [kw for kw in all_keywords if kw != all_keywords[-1]]
+            all_keywords.append(random.choice(candidates))
+
+        # 构建 keyword -> dim_first 的映射
+        keyword_to_dim_first = {}
+        for keyword in all_keywords:
+            for dim_group in request.dimensions:
+                if keyword in dim_group:
+                    keyword_to_dim_first[keyword] = dim_group[0] if dim_group else keyword
+                    break
+
+        # 按 7:3 随机生成题型序列
+        type_list = ["choice"] * 7 + ["judge"] * 3
+        random.shuffle(type_list)
+        question_types = [random.choice(type_list) for _ in range(len(all_keywords))]
+
+        # ========== 并行处理每个知识点 ==========
+
+        def _generate_all():
+            """在子线程中并行执行所有知识点生成"""
+            import concurrent.futures
+
+            def generate_one(keyword, dim_first, q_type, user_id, idx):
+                """生成单个知识点的题目"""
+                return question_service.generate_single_question(
+                    keyword=keyword,
+                    dim_first=dim_first,
+                    q_type=q_type,
+                    user_id=user_id,
+                    save_logs=(idx == 0)
+                )
+
+            # 使用线程池并行执行
+            with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+                futures = []
+                for i, keyword in enumerate(all_keywords):
+                    future = executor.submit(
+                        generate_one,
+                        keyword=keyword,
+                        dim_first=keyword_to_dim_first.get(keyword, keyword),
+                        q_type=question_types[i],
+                        user_id=request.user_id,
+                        idx=i
+                    )
+                    futures.append(future)
+
+                # 等待所有任务完成
+                results = []
+                for future in concurrent.futures.as_completed(futures):
+                    try:
+                        result = future.result()
+                        if result:
+                            results.append(result)
+                    except Exception:
+                        pass
+                return results
+
+        questions = await asyncio.to_thread(_generate_all)
+
+        # ========== 立即返回题目（后台异步写入向量库）==========
+        # 先创建返回数据
+        result = {
             "success": True,
             "data": questions,
             "message": f"成功生成 {len(questions)} 道题目"
         }
+
+        # 后台异步写入向量库（不阻塞返回）
+        if questions and vector_service:
+            async def background_save():
+                try:
+                    # 收集所有需要嵌入的文本
+                    texts_to_embed = list(set(all_keywords))
+                    stems = [q.get('stem', '') for q in questions if q.get('stem')]
+                    texts_to_embed.extend(stems)
+                    texts_to_embed = list(set(texts_to_embed))
+
+                    # 批量异步计算嵌入向量
+                    embeddings_list = await vector_service.compute_embeddings_batch_async(texts_to_embed)
+                    precomputed_embeddings = {text: emb for text, emb in zip(texts_to_embed, embeddings_list)}
+
+                    # 存储题目
+                    qs = QuestionService(
+                        llm_generator=llm,
+                        job_name=request.job_name,
+                        skill_name=request.skill_name,
+                        vector_service=vector_service,
+                        precomputed_embeddings=precomputed_embeddings
+                    )
+                    qs.generate_questions(
+                        keywords=all_keywords,
+                        questions=questions,
+                        user_id=request.user_id
+                    )
+                except Exception:
+                    pass
+
+            # 创建后台任务，立即返回
+            asyncio.create_task(background_save())
+
+        return result
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"题目生成失败: {str(e)}")

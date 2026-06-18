@@ -1,5 +1,6 @@
 """AI问答后端服务主模块"""
 import os
+import sys
 import json
 from typing import Dict, Any, Optional
 from fastapi import FastAPI, HTTPException
@@ -8,11 +9,22 @@ import yaml
 
 # 加载配置
 def load_config() -> Dict[str, Any]:
-    # 配置在项目根目录
-    root_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    config_path = os.path.join(root_dir, "config.yaml")
-    with open(config_path, "r", encoding="utf-8") as f:
-        return yaml.safe_load(f)
+    # 尝试多个位置查找 config.yaml
+    possible_paths = [
+        "config.yaml",  # 当前工作目录
+        os.path.join(os.path.dirname(sys.executable), "config.yaml"),  # exe 同级目录
+    ]
+
+    # PyInstaller 打包后的临时目录
+    if getattr(sys, '_MEIPASS', None):
+        possible_paths.insert(0, os.path.join(sys._MEIPASS, "config.yaml"))
+
+    for config_path in possible_paths:
+        if os.path.exists(config_path):
+            with open(config_path, "r", encoding="utf-8") as f:
+                return yaml.safe_load(f)
+
+    raise FileNotFoundError(f"config.yaml not found in: {possible_paths}")
 
 config = load_config()
 
