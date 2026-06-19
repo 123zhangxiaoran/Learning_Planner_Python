@@ -116,6 +116,7 @@ class QuestionService:
 
     def generate_single_question(self, keyword: str, dim_first: str, q_type: str,
                                   user_id: int = 1,
+                                  difficulty: int = None,
                                   save_logs: bool = False) -> Optional[Dict]:
         """
         根据单个知识点生成一道题目（使用多智能体框架）
@@ -140,6 +141,7 @@ class QuestionService:
                 dim_first=dim_first,
                 existing_questions=None,
                 q_type=q_type,
+                difficulty=difficulty,
                 save_logs=save_logs
             )
 
@@ -178,6 +180,7 @@ class QuestionService:
                         dim_first=dim_first,
                         existing_questions=None,
                         q_type=q_type,
+                        difficulty=difficulty,
                         save_logs=save_logs
                     )
             else:
@@ -203,6 +206,7 @@ class QuestionService:
                         dim_first=dim_first,
                         existing_questions=all_existing_stems[:10],
                         q_type=q_type,
+                        difficulty=difficulty,
                         save_logs=save_logs
                     )
                 else:
@@ -240,6 +244,7 @@ class QuestionService:
                         dim_first=dim_first,
                         existing_questions=None,
                         q_type=q_type,
+                        difficulty=difficulty,
                         save_logs=save_logs
                     )
 
@@ -250,5 +255,6 @@ class QuestionService:
                 dim_first=dim_first,
                 existing_questions=None,
                 q_type=q_type,
+                difficulty=difficulty,
                 save_logs=save_logs
             )

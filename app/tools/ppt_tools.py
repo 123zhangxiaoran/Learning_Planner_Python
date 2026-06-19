@@ -165,85 +165,86 @@ LAYOUTS = [1, 3, 7]
 def create_ppt_tool(llm_generator, skill_name: str, job_name: str, dimensions: list[list[str]], user_id: int) -> StructuredTool:
     """创建PPT生成工具"""
     def generate_ppt():
+        import concurrent.futures
 
-        knowledge_points = "\n".join(
-            f"知识点{i+1}. {', '.join(dim)}"
-            for i, dim in enumerate(dimensions)
-        )
+        # 收集所有需要调用大模型的知识点（每一行从索引1开始，或只有1个元素时取索引0）
+        llm_tasks = []  # [(row_idx, sub_idx, knowledge_point), ...]
+        for row_idx, dim in enumerate(dimensions):
+            if len(dim) <= 1:
+                llm_tasks.append((row_idx, 0, dim[0]))
+            else:
+                for sub_idx in range(1, len(dim)):
+                    llm_tasks.append((row_idx, sub_idx, dim[sub_idx]))
+        print(f"[PPT] llm_tasks count: {len(llm_tasks)}, tasks: {llm_tasks[:3]}...")
 
-        PPT_PROMPT_TEMPLATE = """你是一位专业学习规划师。请根据以下信息，为每个知识点生成简明的定义和简洁的代码示例。
+        PPT_PROMPT_SINGLE = """你是一位专业学习规划师。请根据以下信息，为知识点生成详细定义和一个例子。
 
 【技能方向】{skill_name}
 【职业方向】{job_name}
-
-【知识点】
-{knowledge_points}
+【知识点】{knowledge_point}
 
 要求：
-1. 讲解只写核心定义，一句话概括，一个知识点一行，不要长篇大论
-2. 代码示例要极度简洁，最多10行，只写核心代码片段，不要import、不要主函数、不要打印语句、不要其他运行代码
-3. 代码中的换行符必须使用 \\n 转义字符表示，不要使用实际的换行符
+1. 讲解写详细定义，准确完整地解释该知识点，不要长篇大论
+2. 例子可以是代码、场景描述、实际应用案例等，根据知识点本身特点决定，不强制要求代码
+3. 例子中的换行符必须使用 \\n 转义字符表示，不要使用实际的换行符
 4. 不要在讲解中出现中文冒号和单引号
-5. 返回JSON数组格式：
-[
-    {{"explain": "一句话核心定义", "example": "简洁的核心代码"}},
-    ...
-]
+5. 返回JSON格式（不要数组，单个对象）：
+{{"explain": "详细定义", "example": "例子"}}
 """
 
-        prompt = PPT_PROMPT_TEMPLATE.format(skill_name=skill_name, job_name=job_name, knowledge_points=knowledge_points)
-        result = llm_generator.invoke(prompt)
-
-        # 解析JSON结果
-        try:
-            result_text = result.content if hasattr(result, 'content') else str(result)
-
-            # 多步骤解析策略
-            parsed_data = None
-
-            # 步骤1: 直接尝试解析
-            try:
-                parsed_data = json.loads(result_text)
-            except:
-                pass
-
-            # 步骤2: 清理markdown格式后尝试
-            if parsed_data is None:
-                cleaned_text = result_text.strip()
-                # 去掉markdown代码块格式
-                if cleaned_text.startswith("```"):
-                    first_newline = cleaned_text.find('\n')
-                    if first_newline != -1:
-                        cleaned_text = cleaned_text[first_newline + 1:]
-                    if cleaned_text.endswith("```"):
-                        cleaned_text = cleaned_text[:-3]
-                    cleaned_text = cleaned_text.strip()
-
-                # 找到JSON数组边界
-                start_idx = cleaned_text.find('[')
-                end_idx = cleaned_text.rfind(']')
-                if start_idx != -1 and end_idx != -1:
-                    cleaned_text = cleaned_text[start_idx:end_idx + 1]
-
+        def generate_single(knowledge_point: str):
+            """为单个知识点生成讲解和代码（带重试）"""
+            prompt = PPT_PROMPT_SINGLE.format(
+                skill_name=skill_name,
+                job_name=job_name,
+                knowledge_point=knowledge_point
+            )
+            import time
+            for attempt in range(3):
                 try:
-                    parsed_data = json.loads(cleaned_text)
-                except:
-                    pass
+                    result = llm_generator.invoke(prompt)
+                    result_text = result.content if hasattr(result, 'content') else str(result)
 
-            # 步骤3: 使用解析结果或默认值
-            if parsed_data is not None and isinstance(parsed_data, list):
-                ppt_data = parsed_data
-            else:
-                ppt_data = None
+                    cleaned_text = result_text.strip()
+                    if cleaned_text.startswith("```"):
+                        first_newline = cleaned_text.find('\n')
+                        if first_newline != -1:
+                            cleaned_text = cleaned_text[first_newline + 1:]
+                        if cleaned_text.endswith("```"):
+                            cleaned_text = cleaned_text[:-3]
+                        cleaned_text = cleaned_text.strip()
 
-        except Exception as e:
-            ppt_data = None
+                    start_idx = cleaned_text.find('{')
+                    end_idx = cleaned_text.rfind('}')
+                    if start_idx != -1 and end_idx != -1:
+                        cleaned_text = cleaned_text[start_idx:end_idx + 1]
 
-        # 最终检查：如果没有有效数据，使用默认值
-        if ppt_data is None or not isinstance(ppt_data, list) or len(ppt_data) == 0:
-            # 使用维度名称作为默认值
-            ppt_data = [{"explain": f"{dim[0]}学习的核心知识点", "example": "# 学习内容\n# 代码示例"} for dim in dimensions]
-        
+                    result = json.loads(cleaned_text)
+                    print(f"[PPT] ✓ {knowledge_point[:20]}...")
+                    return result
+                except Exception as e:
+                    error_type = type(e).__name__
+                    print(f"[PPT] 尝试{attempt+1}/3 {knowledge_point[:20]}...: {error_type}")
+                    if attempt < 2:
+                        time.sleep((attempt + 1) * 2)
+            print(f"[PPT] ✗ {knowledge_point[:20]}... 最终失败")
+            return {"explain": f"{knowledge_point}的核心知识点", "example": "# 学习内容\n# 代码示例"}
+
+        # 使用线程池并行调用大模型（限制并发数避免限流）
+        ppt_data = {}
+        if llm_tasks:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+                future_map = {}
+                for row_idx, sub_idx, kp in llm_tasks:
+                    future = executor.submit(generate_single, kp)
+                    future_map[future] = (row_idx, sub_idx)
+                for future in concurrent.futures.as_completed(future_map):
+                    row_idx, sub_idx = future_map[future]
+                    try:
+                        ppt_data[(row_idx, sub_idx)] = future.result()
+                    except Exception:
+                        ppt_data[(row_idx, sub_idx)] = {"explain": f"核心知识点", "example": "# 学习内容\n# 代码示例"}
+
         prs = Presentation()
         slide_w = prs.slide_width
         slide_h = prs.slide_height
@@ -252,10 +253,8 @@ def create_ppt_tool(llm_generator, skill_name: str, job_name: str, dimensions: l
         slide = prs.slides.add_slide(prs.slide_layouts[0])
         _set_slide_bg(slide, DARK_BG)
 
-        # 底部书本装饰
         _draw_book(slide, Inches(0.5), slide_h - Inches(1.1), ACCENT_SKY, 0.8)
         _draw_star_medal(slide, slide_w - Inches(1.5), Inches(0.3), ACCENT_AMBER)
-        # 铅笔装饰
         _draw_pencil(slide, Inches(8.5), Inches(0.4), ACCENT_ROSE, 20)
 
         title_shape = slide.shapes.title
@@ -273,15 +272,12 @@ def create_ppt_tool(llm_generator, skill_name: str, job_name: str, dimensions: l
         slide = prs.slides.add_slide(prs.slide_layouts[6])
         _set_slide_bg(slide, BG_CREAM)
 
-        # 顶部装饰细线
         _add_shape(slide, MSO_SHAPE.RECTANGLE, Inches(0), Inches(0),
                    slide_w, Inches(0.06), ACCENT_AMBER)
 
-        # 装饰
         _draw_book(slide, Inches(0.3), Inches(0.2), ACCENT_TEAL, 0.5)
         _draw_lightbulb(slide, slide_w - Inches(1.0), Inches(0.15), ACCENT_AMBER)
 
-        # 标题
         tx_title = slide.shapes.add_textbox(Inches(1.5), Inches(0.5), Inches(7), Inches(0.8))
         tf = tx_title.text_frame
         tf.word_wrap = True
@@ -292,10 +288,9 @@ def create_ppt_tool(llm_generator, skill_name: str, job_name: str, dimensions: l
         p.font.color.rgb = DARK_TEXT
         p.alignment = PP_ALIGN.CENTER
 
-        # 提取所有维度第一个字段
+        # 提取所有维度第一个字段作为目录标题
         dim_names = [dim[0] for dim in dimensions]
 
-        # 列布局参数：垂直分布，一列满了自动换列
         left_margin = Inches(0.6)
         top_margin = Inches(1.5)
         col_width = Inches(2.8)
@@ -303,17 +298,13 @@ def create_ppt_tool(llm_generator, skill_name: str, job_name: str, dimensions: l
         item_height = Inches(0.5)
         max_per_col = 10
 
-        num_cols = (len(dim_names) + max_per_col - 1) // max_per_col
-
         for idx, name in enumerate(dim_names):
             col_idx = idx // max_per_col
             row_idx = idx % max_per_col
             left = left_margin + col_idx * (col_width + col_gap)
             top = top_margin + row_idx * item_height
 
-            # 序号圆点
             _add_shape(slide, MSO_SHAPE.OVAL, left, top + Inches(0.08), Inches(0.18), Inches(0.18), ACCENT_AMBER)
-            # 序号数字
             tx_num = slide.shapes.add_textbox(left, top + Inches(0.08), Inches(0.18), Inches(0.18))
             tfn = tx_num.text_frame
             tfn.paragraphs[0].text = str(idx + 1)
@@ -322,7 +313,6 @@ def create_ppt_tool(llm_generator, skill_name: str, job_name: str, dimensions: l
             tfn.paragraphs[0].font.bold = True
             tfn.paragraphs[0].alignment = PP_ALIGN.CENTER
 
-            # 维度名称（仅取第一个字段 dim[0]）
             tx_box = slide.shapes.add_textbox(left + Inches(0.28), top, col_width - Inches(0.28), item_height)
             tf = tx_box.text_frame
             tf.word_wrap = True
@@ -333,45 +323,42 @@ def create_ppt_tool(llm_generator, skill_name: str, job_name: str, dimensions: l
             p.alignment = PP_ALIGN.LEFT
             tf.paragraphs[0].space_before = Pt(4)
 
-        # ==================== 3. 中间内容页（全部用空白布局，手动居中） ====================
-        for i, dim in enumerate(dimensions):
-            bg_color, accent = PAGE_THEMES[i % len(PAGE_THEMES)]
-            layout_style = LAYOUTS[i % len(LAYOUTS)]
-            slide = prs.slides.add_slide(prs.slide_layouts[6])  # 空白布局
-            _set_slide_bg(slide, bg_color)
+        # ==================== 3. 中间内容页 ====================
+        for row_idx, dim in enumerate(dimensions):
+            summary_title = dim[0]
 
-            # 顶部装饰细线
-            _add_shape(slide, MSO_SHAPE.RECTANGLE, Inches(0), Inches(0),
-                       slide_w, Inches(0.06), accent)
+            if len(dim) <= 1:
+                # 只有标题，直接生成一页内容
+                bg_color, accent = PAGE_THEMES[row_idx % len(PAGE_THEMES)]
+                layout_style = LAYOUTS[row_idx % len(LAYOUTS)]
+                slide = prs.slides.add_slide(prs.slide_layouts[6])
+                _set_slide_bg(slide, bg_color)
 
-            # 右下角装饰画
-            right_corner = [
-                (_draw_star_medal, slide_w - Inches(1.2), slide_h - Inches(1.1), ACCENT_AMBER),
-                (_draw_lightbulb, slide_w - Inches(1.2), slide_h - Inches(1.1), ACCENT_AMBER),
-                (_draw_tree, slide_w - Inches(1.3), slide_h - Inches(1.2), ACCENT_EMERALD),
-            ]
-            draw_fn2, *args2 = right_corner[i % len(right_corner)]
-            draw_fn2(slide, *args2)
+                _add_shape(slide, MSO_SHAPE.RECTANGLE, Inches(0), Inches(0),
+                           slide_w, Inches(0.06), accent)
 
-            # 获取当前知识点的内容
-            item_data = ppt_data[i] if i < len(ppt_data) else {}
-            explain_text = item_data.get("explain", "")
-            # 把代码中的 \\n 替换为真正的换行符
-            example_text = item_data.get("example", "").replace('\\n', '\n')
+                right_corner = [
+                    (_draw_star_medal, slide_w - Inches(1.2), slide_h - Inches(1.1), ACCENT_AMBER),
+                    (_draw_lightbulb, slide_w - Inches(1.2), slide_h - Inches(1.1), ACCENT_AMBER),
+                    (_draw_tree, slide_w - Inches(1.3), slide_h - Inches(1.2), ACCENT_EMERALD),
+                ]
+                draw_fn2, *args2 = right_corner[row_idx % len(right_corner)]
+                draw_fn2(slide, *args2)
 
-            if layout_style == 1:
-                # 上下布局：标题顶部居中，解释在上，代码块在下，宽度80%居中
+                item_data = ppt_data.get((row_idx, 0), {})
+                explain_text = item_data.get("explain", "")
+                example_text = item_data.get("example", "").replace('\\n', '\n')
+
                 tx_title = slide.shapes.add_textbox(Inches(1), Inches(0.6), Inches(8), Inches(0.8))
                 tf = tx_title.text_frame
                 tf.word_wrap = True
                 p = tf.paragraphs[0]
-                p.text = dim[0]
+                p.text = summary_title
                 p.font.size = Pt(22)
                 p.font.bold = True
                 p.font.color.rgb = DARK_TEXT
                 p.alignment = PP_ALIGN.CENTER
 
-                # 解释内容
                 tx_explain = slide.shapes.add_textbox(Inches(1), Inches(1.5), Inches(8), Inches(1.5))
                 tfe = tx_explain.text_frame
                 tfe.word_wrap = True
@@ -382,52 +369,10 @@ def create_ppt_tool(llm_generator, skill_name: str, job_name: str, dimensions: l
                 p.alignment = PP_ALIGN.LEFT
                 p.line_spacing = Pt(18)
 
-                # 代码背景块（黑色矩形，80%宽度居中）
                 code_bg = _add_shape(slide, MSO_SHAPE.ROUNDED_RECTANGLE,
                                     Inches(1), Inches(3.0), Inches(8), Inches(3.5),
                                     RGBColor(0x1E, 0x1E, 0x1E))
 
-                # 代码文本
-                tx_code = slide.shapes.add_textbox(Inches(1.2), Inches(3.1), Inches(7.6), Inches(3.3))
-                tfc = tx_code.text_frame
-                tfc.word_wrap = True
-                p = tfc.paragraphs[0]
-                p.text = example_text
-                p.font.size = Pt(10)
-                p.font.name = "Consolas"
-                p.font.color.rgb = RGBColor(0xA9, 0xB7, 0xC6)
-                p.alignment = PP_ALIGN.LEFT
-                p.line_spacing = Pt(14)
-
-            elif layout_style == 3:
-                # 左右布局：统一为上下布局，宽度80%居中
-                tx_title = slide.shapes.add_textbox(Inches(1), Inches(0.6), Inches(8), Inches(0.8))
-                tf = tx_title.text_frame
-                tf.word_wrap = True
-                p = tf.paragraphs[0]
-                p.text = dim[0]
-                p.font.size = Pt(22)
-                p.font.bold = True
-                p.font.color.rgb = DARK_TEXT
-                p.alignment = PP_ALIGN.CENTER
-
-                # 解释内容
-                tx_explain = slide.shapes.add_textbox(Inches(1), Inches(1.5), Inches(8), Inches(1.5))
-                tfe = tx_explain.text_frame
-                tfe.word_wrap = True
-                p = tfe.paragraphs[0]
-                p.text = explain_text
-                p.font.size = Pt(12)
-                p.font.color.rgb = DARK_TEXT
-                p.alignment = PP_ALIGN.LEFT
-                p.line_spacing = Pt(18)
-
-                # 代码背景块（黑色矩形）
-                code_bg = _add_shape(slide, MSO_SHAPE.ROUNDED_RECTANGLE,
-                                    Inches(1), Inches(3.0), Inches(8), Inches(3.5),
-                                    RGBColor(0x1E, 0x1E, 0x1E))
-
-                # 代码文本
                 tx_code = slide.shapes.add_textbox(Inches(1.2), Inches(3.1), Inches(7.6), Inches(3.3))
                 tfc = tx_code.text_frame
                 tfc.word_wrap = True
@@ -440,44 +385,98 @@ def create_ppt_tool(llm_generator, skill_name: str, job_name: str, dimensions: l
                 p.line_spacing = Pt(14)
 
             else:
-                # 简洁布局：标题顶部居中，解释在上，代码块在下，宽度80%居中
+                # ===== 有子知识点 =====
+                # 先添加一页总结页：标题是 dim[0]，下面列出 dim[1:] 作为要点
+                bg_color, accent = PAGE_THEMES[row_idx % len(PAGE_THEMES)]
+                slide = prs.slides.add_slide(prs.slide_layouts[6])
+                _set_slide_bg(slide, bg_color)
+
+                _add_shape(slide, MSO_SHAPE.RECTANGLE, Inches(0), Inches(0),
+                           slide_w, Inches(0.06), accent)
+
+                _draw_book(slide, Inches(0.3), Inches(0.2), ACCENT_TEAL, 0.5)
+
+                # 标题
                 tx_title = slide.shapes.add_textbox(Inches(1), Inches(0.6), Inches(8), Inches(0.8))
                 tf = tx_title.text_frame
                 tf.word_wrap = True
                 p = tf.paragraphs[0]
-                p.text = dim[0]
+                p.text = summary_title
                 p.font.size = Pt(26)
+                p.font.bold = True
                 p.font.color.rgb = DARK_TEXT
                 p.alignment = PP_ALIGN.CENTER
-                tf.paragraphs[0].alignment = PP_ALIGN.CENTER
 
-                # 解释内容
-                tx_explain = slide.shapes.add_textbox(Inches(1), Inches(1.5), Inches(8), Inches(1.5))
-                tfe = tx_explain.text_frame
-                tfe.word_wrap = True
-                p = tfe.paragraphs[0]
-                p.text = explain_text
-                p.font.size = Pt(12)
-                p.font.color.rgb = DARK_TEXT
-                p.alignment = PP_ALIGN.LEFT
-                p.line_spacing = Pt(18)
+                # 子知识点列表
+                bullet_top = Inches(1.6)
+                for sub_idx, sub_point in enumerate(dim[1:]):
+                    tx_bullet = slide.shapes.add_textbox(Inches(1.2), bullet_top + Inches(sub_idx * 0.55), Inches(7.5), Inches(0.5))
+                    tf = tx_bullet.text_frame
+                    tf.word_wrap = True
+                    p = tf.paragraphs[0]
+                    p.text = f"● {sub_point}"
+                    p.font.size = Pt(14)
+                    p.font.color.rgb = DARK_TEXT
+                    p.alignment = PP_ALIGN.LEFT
+                    p.line_spacing = Pt(22)
 
-                # 代码背景块（黑色矩形）
-                code_bg = _add_shape(slide, MSO_SHAPE.ROUNDED_RECTANGLE,
-                                    Inches(1), Inches(3.0), Inches(8), Inches(3.5),
-                                    RGBColor(0x1E, 0x1E, 0x1E))
+                # 再为每个子知识点添加一页内容页
+                for sub_idx in range(1, len(dim)):
+                    sub_point = dim[sub_idx]
+                    item_data = ppt_data.get((row_idx, sub_idx), {})
+                    explain_text = item_data.get("explain", "")
+                    example_text = item_data.get("example", "").replace('\\n', '\n')
 
-                # 代码文本
-                tx_code = slide.shapes.add_textbox(Inches(1.2), Inches(3.1), Inches(7.6), Inches(3.3))
-                tfc = tx_code.text_frame
-                tfc.word_wrap = True
-                p = tfc.paragraphs[0]
-                p.text = example_text
-                p.font.size = Pt(10)
-                p.font.name = "Consolas"
-                p.font.color.rgb = RGBColor(0xA9, 0xB7, 0xC6)
-                p.alignment = PP_ALIGN.LEFT
-                p.line_spacing = Pt(14)
+                    bg_color2, accent2 = PAGE_THEMES[(row_idx + sub_idx) % len(PAGE_THEMES)]
+                    layout_style = LAYOUTS[(row_idx + sub_idx) % len(LAYOUTS)]
+                    slide2 = prs.slides.add_slide(prs.slide_layouts[6])
+                    _set_slide_bg(slide2, bg_color2)
+
+                    _add_shape(slide2, MSO_SHAPE.RECTANGLE, Inches(0), Inches(0),
+                               slide_w, Inches(0.06), accent2)
+
+                    right_corner = [
+                        (_draw_star_medal, slide_w - Inches(1.2), slide_h - Inches(1.1), ACCENT_AMBER),
+                        (_draw_lightbulb, slide_w - Inches(1.2), slide_h - Inches(1.1), ACCENT_AMBER),
+                        (_draw_tree, slide_w - Inches(1.3), slide_h - Inches(1.2), ACCENT_EMERALD),
+                    ]
+                    draw_fn2, *args2 = right_corner[(row_idx + sub_idx) % len(right_corner)]
+                    draw_fn2(slide2, *args2)
+
+                    tx_title2 = slide2.shapes.add_textbox(Inches(1), Inches(0.6), Inches(8), Inches(0.8))
+                    tf2 = tx_title2.text_frame
+                    tf2.word_wrap = True
+                    p2 = tf2.paragraphs[0]
+                    p2.text = sub_point
+                    p2.font.size = Pt(22)
+                    p2.font.bold = True
+                    p2.font.color.rgb = DARK_TEXT
+                    p2.alignment = PP_ALIGN.CENTER
+
+                    tx_explain2 = slide2.shapes.add_textbox(Inches(1), Inches(1.5), Inches(8), Inches(1.5))
+                    tfe2 = tx_explain2.text_frame
+                    tfe2.word_wrap = True
+                    p2 = tfe2.paragraphs[0]
+                    p2.text = explain_text
+                    p2.font.size = Pt(12)
+                    p2.font.color.rgb = DARK_TEXT
+                    p2.alignment = PP_ALIGN.LEFT
+                    p2.line_spacing = Pt(18)
+
+                    code_bg2 = _add_shape(slide2, MSO_SHAPE.ROUNDED_RECTANGLE,
+                                        Inches(1), Inches(3.0), Inches(8), Inches(3.5),
+                                        RGBColor(0x1E, 0x1E, 0x1E))
+
+                    tx_code2 = slide2.shapes.add_textbox(Inches(1.2), Inches(3.1), Inches(7.6), Inches(3.3))
+                    tfc2 = tx_code2.text_frame
+                    tfc2.word_wrap = True
+                    p2 = tfc2.paragraphs[0]
+                    p2.text = example_text
+                    p2.font.size = Pt(10)
+                    p2.font.name = "Consolas"
+                    p2.font.color.rgb = RGBColor(0xA9, 0xB7, 0xC6)
+                    p2.alignment = PP_ALIGN.LEFT
+                    p2.line_spacing = Pt(14)
                 
                 
 

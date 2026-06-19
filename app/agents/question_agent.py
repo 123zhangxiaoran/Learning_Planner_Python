@@ -38,6 +38,7 @@ class QuestionAgent:
 
     def generate(self, keyword: str, dim_first: str = "",
                  existing_questions: list = None, q_type: str = "choice",
+                 difficulty: int = None,
                  max_iterations: int = 3,
                  save_logs: bool = False) -> Optional[Dict]:
         def log(*args):
@@ -53,7 +54,7 @@ class QuestionAgent:
 
         for iteration in range(max_iterations):
             # 1. 生成题目（第一轮无改进建议，后续传入质检/验证的改进建议）
-            question = self._generate_question(keyword, dim_first, q_type, existing_ref, last_suggestion, log)
+            question = self._generate_question(keyword, dim_first, q_type, existing_ref, last_suggestion, difficulty, log)
             if not question:
                 continue
             last_question = question
@@ -85,8 +86,18 @@ class QuestionAgent:
         return last_question
 
     def _generate_question(self, keyword: str, dim_first: str, q_type: str,
-                          existing_ref: str, improvement: str, log) -> Optional[Dict]:
+                          existing_ref: str, improvement: str, difficulty, log) -> Optional[Dict]:
         """生成题目"""
+        # 设置难度默认值并确保是整数
+        try:
+            difficulty_value = int(difficulty) if difficulty is not None else 10
+        except (ValueError, TypeError):
+            difficulty_value = 10
+        if difficulty_value < 1:
+            difficulty_value = 1
+        elif difficulty_value > 100:
+            difficulty_value = 100
+
         if q_type == "judge":
             prompt = f"""你是{self.job_name}的{self.skill_name}教学专家，负责生成高质量判断题。
 
@@ -110,7 +121,7 @@ JSON格式：
     "explanation": "详细解析为什么正确或错误",
     "dimension": "{dim_first}",
     "keyword": "{keyword}",
-    "difficulty": 10
+    "difficulty": {difficulty_value}
 }}"""
         elif q_type == "fill":
             prompt = f"""你是{self.job_name}的{self.skill_name}教学专家，负责生成高质量填空题。
@@ -135,7 +146,7 @@ JSON格式：
     "explanation": "SQL = Structured Query Language，中文意思是结构化查询语言，是一种用于管理关系型数据库的编程语言",
     "dimension": "{dim_first}",
     "keyword": "{keyword}",
-    "difficulty": 10
+    "difficulty": {difficulty_value}
 }}"""
         elif q_type == "analysis":
             prompt = f"""你是{self.job_name}的{self.skill_name}教学专家，负责生成高质量分析题。
@@ -151,16 +162,16 @@ JSON格式：
 3. 分析题【禁止】包含options字段，不能有任何选项
 4. answer字段填标准答案要点，用"|"分隔多个要点
 5. difficulty字段必须是1-100之间的整数
+6. 【注意】分析题不包含explanation字段
 
 JSON格式：
 {{
     "type": "analysis",
     "stem": "请分析{keyword}的工作原理，并说明其主要应用场景",
     "answer": "原理说明|应用场景1|应用场景2",
-    "explanation": "详细解析标准答案要点",
     "dimension": "{dim_first}",
     "keyword": "{keyword}",
-    "difficulty": 10
+    "difficulty": {difficulty_value}
 }}"""
         else:
             prompt = f"""你是{self.job_name}的{self.skill_name}教学专家，负责生成高质量选择题。
@@ -185,7 +196,7 @@ JSON格式：
     "explanation": "详细解析",
     "dimension": "{dim_first}",
     "keyword": "{keyword}",
-    "difficulty": 10
+    "difficulty": {difficulty_value}
 }}"""
 
         try:
@@ -233,15 +244,13 @@ JSON格式：
 
 题干：{question.get('stem', '')}
 答案：{question.get('answer', '')}
-解析：{question.get('explanation', '')}
 题型：分析题（开放性问题，用"|"分隔多个要点）
 
 审核维度：
 1. 题干清晰度 - 分析题题干必须是开放性问题，能引发深入思考
 2. 答案合理性 - 答案要点必须合理，多个要点用"|"分隔
-3. 解析完整性 - 解析必须详细解释每个答案要点
 
-评分0-10分，7分以上合格。注意：分析题没有选项是正常的，不需要为此扣分。
+评分0-10分，7分以上合格。注意：分析题没有选项和解析是正常的，不需要为此扣分。
 
 只输出JSON：{{"score": 0-10, "issues": [...], "suggestions": [...]}}"""
         else:

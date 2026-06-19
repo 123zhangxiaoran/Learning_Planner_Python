@@ -64,12 +64,24 @@ class LearningPathRequest(BaseModel):
     user_id: int
     userinput: str
 
+class FetchAllSkillRequest(BaseModel):
+    """获取所有技能请求"""
+    skills: List[List[str]]  # [["岗位名", "技能名"], ...]
+
+class AnalysisAIRequest(BaseModel):
+    """AI分析请求"""
+    questionText: str  # 题目文本
+    userInput: str  # 用户输入
+    correctAnswer: str  # 正确答案
+
 class GenerateQuestionsRequest(BaseModel):
     """生成题目请求 - AnalyticalSkillDTO"""
     skill_name: str  # 技能名称（如 HTML）
     job_name: str  # 岗位名称（如 前端开发工程师）
     user_id: int
     dimensions: List[List[str]]  # 知识点维度列表
+    userinput: Optional[str] = None  # 用户输入文本
+    difficulty: Optional[List[List[Any]]] = None  # 难度列表 [["维度名", 难度值], ...]
 
 class AnswerResponse(BaseModel):
     """问答响应"""
@@ -335,6 +347,144 @@ async def learning_path(request: LearningPathRequest):
         raise HTTPException(status_code=500, detail=f"学习路径生成失败: {str(e)}")
 
 
+@router.post("/api/skill/fetchAllSkill")
+async def fetch_all_skill(request: FetchAllSkillRequest):
+    """
+    获取所有技能接口
+    根据岗位+技能列表，并行查询每个技能的知识点维度
+    请求体：{"skills": [["前端开发工程师", "vue"], ["前端开发工程师", "js"]]}
+    """
+    try:
+        import concurrent.futures
+
+        def process_single_skill(job_name: str, skill_name: str):
+            """处理单个岗位+技能，获取该技能的知识点（同 fetchSkill 逻辑）"""
+            results = vector_service.get_by_metadata("level3", [job_name])
+
+            for r in results:
+                metadata = r.get("metadata", {})
+                level4_desc = metadata.get("level4_desc", "")
+
+                if level4_desc:
+                    for item in level4_desc.split('; '):
+                        if ':' in item:
+                            sname, sdesc = item.split(':', 1)
+                            sname = sname.strip()
+
+                            if sname == skill_name:
+                                # 从 metadata 中获取该技能的知识点
+                                dim_key = f"skill_dims_{sname}"
+                                dimensions_str = metadata.get(dim_key, "")
+                                try:
+                                    dimensions_list = json.loads(dimensions_str) if dimensions_str else []
+                                except json.JSONDecodeError:
+                                    dimensions_list = [d.strip() for d in dimensions_str.split('; ')] if dimensions_str else []
+
+                                return {
+                                    "success": True,
+                                    "skill_name": sname,
+                                    "dimensions": dimensions_list,
+                                    "job_name": metadata.get("level3"),
+                                    "major": metadata.get("level2")
+                                }
+
+            return {"success": False, "skill_name": skill_name, "dimensions": [], "job_name": job_name}
+
+        # 使用线程池并行执行
+        with concurrent.futures.ThreadPoolExecutor(max_workers=len(request.skills) or 1) as executor:
+            futures = {
+                executor.submit(process_single_skill, pair[0], pair[1]): pair
+                for pair in request.skills if len(pair) >= 2
+            }
+            results = []
+            for future in concurrent.futures.as_completed(futures):
+                try:
+                    result = future.result()
+                    if result:
+                        results.append(result)
+                except Exception:
+                    pass
+
+        return {
+            "success": True,
+            "data": results,
+            "message": f"成功获取 {len(results)} 个技能的知识点"
+        }
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"获取所有技能失败: {str(e)}")
+    
+
+@router.post("/api/skill/analysisAI")
+async def analysis_ai(request: AnalysisAIRequest):
+    """
+    AI分析接口
+    调用大模型对用户的回答进行评分（0-100分）
+    根据题目(questionText)、用户回答(userInput)、正确答案(correctAnswer)
+    """
+    try:
+        # 取出数据
+        question_text = request.questionText
+        user_input = request.userInput
+        correct_answer = request.correctAnswer
+
+        # 构建评分提示词（分析题评分）
+        scoring_prompt = f"""你是一个专业的分析题评分助手。请根据题目、参考答案和用户的回答，对用户的分析作答进行评分。
+
+评分规则：
+- 评分范围：0-100分
+- 分析题没有绝对的标准答案，参考答案仅供参考
+- 根据用户回答的完整度、准确性、逻辑性、深度进行综合评分
+- 回答全面、逻辑清晰、分析深入 → 高分（80-100）
+- 回答基本正确但不够全面 → 中等分（50-79）
+- 回答有部分正确内容但存在明显错误或偏差 → 低分（10-49）
+- 回答完全错误、答非所问或空白 → 0分
+
+请严格按照以下JSON格式返回，不要包含其他内容：
+{{"score": 分数, "reason": "评分理由（只输出理由本身，不要引用用户的回答内容，不要包含'用户回答为'等描述）"}}
+
+题目：{question_text}
+参考答案：{correct_answer}
+用户回答：{user_input}"""
+
+        # 调用大模型评分（使用线程池避免阻塞）
+        from langchain_core.prompts import PromptTemplate
+
+        llm = ai_service.llm_generator
+        response = await asyncio.to_thread(
+            lambda: llm.invoke(scoring_prompt)
+        )
+
+        # 解析大模型返回的JSON
+        content = response.content if hasattr(response, 'content') else str(response)
+        try:
+            # 尝试提取JSON部分
+            import re
+            json_match = re.search(r'\{[^}]+\}', content)
+            if json_match:
+                result = json.loads(json_match.group())
+            else:
+                result = json.loads(content)
+        except (json.JSONDecodeError, AttributeError):
+            # 解析失败时返回原始内容
+            result = {"score": 0, "reason": "评分解析失败"}
+
+        score = result.get("score", 0)
+        reason = result.get("reason", "")
+
+        return {
+            "success": True,
+            "data": {
+                "score": score,
+                "reason": reason,
+            },
+            "message": "评分成功"
+        }
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"AI分析失败: {str(e)}")
+
+
 @router.post("/api/skill/fetchSkill")
 async def fetch_skill_knowledge(request: FetchSkillKnowRequest):
     """
@@ -444,10 +594,46 @@ async def generate_questions(request: GenerateQuestionsRequest):
                     keyword_to_dim_first[keyword] = dim_group[0] if dim_group else keyword
                     break
 
-        # 按 7:3 随机生成题型序列
-        type_list = ["choice"] * 7 + ["judge"] * 3
-        random.shuffle(type_list)
-        question_types = [random.choice(type_list) for _ in range(len(all_keywords))]
+        # 构建 keyword -> difficulty 的映射
+        keyword_to_difficulty = {}
+        if request.difficulty:
+            for diff_item in request.difficulty:
+                if len(diff_item) >= 2:
+                    dim_name = str(diff_item[0])
+                    try:
+                        diff_value = int(diff_item[1])
+                    except (ValueError, TypeError):
+                        diff_value = 0
+                    keyword_to_difficulty[dim_name] = diff_value
+
+        # 根据知识点分数决定题型组合
+        def get_question_types_by_score(score):
+            """根据分数返回题型列表"""
+            if score <= 10:
+                return ["judge"] * 7 + ["choice"] * 3
+            elif score <= 30:
+                return ["judge"] * 3 + ["choice"] * 7
+            elif score <= 50:
+                return ["judge"] * 3 + ["choice"] * 5 + ["fill"] * 2
+            elif score <= 75:
+                return ["judge"] * 2 + ["choice"] * 3 + ["fill"] * 3
+            elif score <= 90:
+                return ["choice"] * 4 + ["fill"] * 6
+            else:  # >90 and <=100
+                return ["analysis"] * 10
+
+        # 为每个知识点分配题型
+        question_types = []
+        for keyword in all_keywords:
+            # 找到该 keyword 对应的 difficulty 分数
+            score = 0  # 默认分数为0（最低难度）
+            for dim_group in request.dimensions:
+                if keyword in dim_group:
+                    dim_first = dim_group[0]
+                    score = keyword_to_difficulty.get(dim_first, 0)
+                    break
+            type_list = get_question_types_by_score(score)
+            question_types.append(random.choice(type_list))
 
         # ========== 并行处理每个知识点 ==========
 
@@ -455,13 +641,14 @@ async def generate_questions(request: GenerateQuestionsRequest):
             """在子线程中并行执行所有知识点生成"""
             import concurrent.futures
 
-            def generate_one(keyword, dim_first, q_type, user_id, idx):
+            def generate_one(keyword, dim_first, q_type, user_id, idx, difficulty=None):
                 """生成单个知识点的题目"""
                 return question_service.generate_single_question(
                     keyword=keyword,
                     dim_first=dim_first,
                     q_type=q_type,
                     user_id=user_id,
+                    difficulty=difficulty,
                     save_logs=(idx == 0)
                 )
 
@@ -469,13 +656,22 @@ async def generate_questions(request: GenerateQuestionsRequest):
             with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
                 futures = []
                 for i, keyword in enumerate(all_keywords):
+                    dim_first = keyword_to_dim_first.get(keyword, keyword)
+                    # 从 keyword 所在维度组获取第一个元素作为 difficulty 的 key
+                    diff_key = None
+                    for dim_group in request.dimensions:
+                        if keyword in dim_group:
+                            diff_key = dim_group[0] if dim_group else keyword
+                            break
+                    difficulty = keyword_to_difficulty.get(diff_key)
                     future = executor.submit(
                         generate_one,
                         keyword=keyword,
-                        dim_first=keyword_to_dim_first.get(keyword, keyword),
+                        dim_first=dim_first,
                         q_type=question_types[i],
                         user_id=request.user_id,
-                        idx=i
+                        idx=i,
+                        difficulty=difficulty
                     )
                     futures.append(future)
 
