@@ -39,7 +39,7 @@ class QuestionAgent:
     def generate(self, keyword: str, dim_first: str = "",
                  existing_questions: list = None, q_type: str = "choice",
                  difficulty: int = None,
-                 max_iterations: int = 3,
+                 max_iterations: int = 2,
                  save_logs: bool = False) -> Optional[Dict]:
         def log(*args):
             if save_logs:

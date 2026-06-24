@@ -15,7 +15,7 @@ vector_db:
 
 ai:
   provider: dashscope
-  model: qwen3.6-plus
+  model: qwen3.7-max-preview
   temperature: 0.7
   max_tokens: 15000
 

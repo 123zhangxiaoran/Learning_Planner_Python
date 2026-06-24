@@ -8,7 +8,9 @@ from pptx.enum.shapes import MSO_SHAPE
 from io import BytesIO
 import base64
 import json
-import random
+import time
+import concurrent.futures
+import threading
 
 
 # ==================== 柔和学习色系 ====================
@@ -114,11 +116,13 @@ def _draw_compass(slide, left, top, color):
     # 外圈
     ring = _add_shape(slide, MSO_SHAPE.OVAL, left, top, Inches(0.7), Inches(0.7), color)
     ring.fill.background()
+    ring.line.fill.solid()
     ring.line.color.rgb = color
     ring.line.width = Pt(3)
     # 内圈
     inner = _add_shape(slide, MSO_SHAPE.OVAL, left + Inches(0.15), top + Inches(0.15), Inches(0.4), Inches(0.4), color)
     inner.fill.background()
+    inner.line.fill.solid()
     inner.line.color.rgb = color
     inner.line.width = Pt(1.5)
     # 指针 - 上三角（北）
@@ -165,9 +169,7 @@ LAYOUTS = [1, 3, 7]
 def create_ppt_tool(llm_generator, skill_name: str, job_name: str, dimensions: list[list[str]], user_id: int) -> StructuredTool:
     """创建PPT生成工具"""
     def generate_ppt():
-        import concurrent.futures
-
-        # 收集所有需要调用大模型的知识点（每一行从索引1开始，或只有1个元素时取索引0）
+        # 收集所有知识点并建立索引映射
         llm_tasks = []  # [(row_idx, sub_idx, knowledge_point), ...]
         for row_idx, dim in enumerate(dimensions):
             if len(dim) <= 1:
@@ -175,31 +177,33 @@ def create_ppt_tool(llm_generator, skill_name: str, job_name: str, dimensions: l
             else:
                 for sub_idx in range(1, len(dim)):
                     llm_tasks.append((row_idx, sub_idx, dim[sub_idx]))
-        print(f"[PPT] llm_tasks count: {len(llm_tasks)}, tasks: {llm_tasks[:3]}...")
+        print(f"[PPT] 待生成知识点: {len(llm_tasks)}个")
 
-        PPT_PROMPT_SINGLE = """你是一位专业学习规划师。请根据以下信息，为知识点生成详细定义和一个例子。
+        PPT_PROMPT_BATCH = """你是一位专业学习规划师。请为以下知识点分别生成详细定义。
 
 【技能方向】{skill_name}
 【职业方向】{job_name}
-【知识点】{knowledge_point}
+
+知识点列表：
+{knowledge_list}
 
 要求：
-1. 讲解写详细定义，准确完整地解释该知识点，不要长篇大论
-2. 例子可以是代码、场景描述、实际应用案例等，根据知识点本身特点决定，不强制要求代码
-3. 例子中的换行符必须使用 \\n 转义字符表示，不要使用实际的换行符
-4. 不要在讲解中出现中文冒号和单引号
-5. 返回JSON格式（不要数组，单个对象）：
-{{"explain": "详细定义", "example": "例子"}}
-"""
+1. 每个讲解写详细定义，准确完整地解释该知识点，不要长篇大论
+2. 不要在讲解中出现中文冒号和单引号
+3. 返回JSON数组，按顺序对应上面的知识点列表：
+[
+  {{"knowledge_point": "知识点1", "explain": "详细定义"}},
+  {{"knowledge_point": "知识点2", "explain": "详细定义"}}
+]"""
 
-        def generate_single(knowledge_point: str):
-            """为单个知识点生成讲解和代码（带重试）"""
-            prompt = PPT_PROMPT_SINGLE.format(
+        def generate_batch(knowledge_points: list[str]) -> list[dict]:
+            """为一批知识点批量生成讲解（一次大模型调用）"""
+            knowledge_text = "\n".join(f"{i+1}. {kp}" for i, kp in enumerate(knowledge_points))
+            prompt = PPT_PROMPT_BATCH.format(
                 skill_name=skill_name,
                 job_name=job_name,
-                knowledge_point=knowledge_point
+                knowledge_list=knowledge_text
             )
-            import time
             for attempt in range(3):
                 try:
                     result = llm_generator.invoke(prompt)
@@ -214,36 +218,65 @@ def create_ppt_tool(llm_generator, skill_name: str, job_name: str, dimensions: l
                             cleaned_text = cleaned_text[:-3]
                         cleaned_text = cleaned_text.strip()
 
-                    start_idx = cleaned_text.find('{')
-                    end_idx = cleaned_text.rfind('}')
+                    start_idx = cleaned_text.find('[')
+                    end_idx = cleaned_text.rfind(']')
                     if start_idx != -1 and end_idx != -1:
                         cleaned_text = cleaned_text[start_idx:end_idx + 1]
 
-                    result = json.loads(cleaned_text)
-                    print(f"[PPT] ✓ {knowledge_point[:20]}...")
-                    return result
+                    results = json.loads(cleaned_text)
+                    if not isinstance(results, list):
+                        raise ValueError("返回结果不是数组")
+                    print(f"[PPT] ✓ 生成一批 {len(results)} 个知识点")
+                    return results
                 except Exception as e:
                     error_type = type(e).__name__
-                    print(f"[PPT] 尝试{attempt+1}/3 {knowledge_point[:20]}...: {error_type}")
+                    print(f"[PPT] 尝试{attempt+1}/3 批量生成失败: {error_type}")
                     if attempt < 2:
                         time.sleep((attempt + 1) * 2)
-            print(f"[PPT] ✗ {knowledge_point[:20]}... 最终失败")
-            return {"explain": f"{knowledge_point}的核心知识点", "example": "# 学习内容\n# 代码示例"}
+            print(f"[PPT] ✗ 批量生成最终失败，使用默认值")
+            return [{"knowledge_point": kp, "explain": f"{kp}的核心知识点"} for kp in knowledge_points]
 
-        # 使用线程池并行调用大模型（限制并发数避免限流）
+        # 并发分批次调用大模型（每批15个知识点，并发跑）
         ppt_data = {}
-        if llm_tasks:
-            with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
-                future_map = {}
-                for row_idx, sub_idx, kp in llm_tasks:
-                    future = executor.submit(generate_single, kp)
-                    future_map[future] = (row_idx, sub_idx)
+        batch_size = 8
+        knowledge_points = [kp for _, _, kp in llm_tasks]
+
+        # 将知识点分成多批
+        batches = []
+        for batch_start in range(0, len(knowledge_points), batch_size):
+            batch_kps = knowledge_points[batch_start:batch_start + batch_size]
+            batches.append((batch_start, batch_kps))
+
+        if batches:
+            rate_limiter = threading.Semaphore(3)  # 最多同时3批并发
+            def run_batch(batch_start, batch_kps):
+                with rate_limiter:
+                    return batch_start, generate_batch(batch_kps)
+
+            with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
+                future_map = {executor.submit(run_batch, bs, bkp): bs for bs, bkp in batches}
                 for future in concurrent.futures.as_completed(future_map):
-                    row_idx, sub_idx = future_map[future]
+                    batch_start = future_map[future]
+                    batch_kps = knowledge_points[batch_start:batch_start + batch_size]
                     try:
-                        ppt_data[(row_idx, sub_idx)] = future.result()
-                    except Exception:
-                        ppt_data[(row_idx, sub_idx)] = {"explain": f"核心知识点", "example": "# 学习内容\n# 代码示例"}
+                        batch_results = future.result()[1]
+                        for i, result in enumerate(batch_results):
+                            if i < len(batch_kps):
+                                actual_idx = batch_start + i
+                                row_idx, sub_idx, _ = llm_tasks[actual_idx]
+                                ppt_data[(row_idx, sub_idx)] = {"explain": result.get("explain", f"{batch_kps[i]}的核心知识点")}
+                    except Exception as e:
+                        print(f"[PPT] 批次 {batch_start} 执行异常: {e}")
+                        for i, kp in enumerate(batch_kps):
+                            actual_idx = batch_start + i
+                            row_idx, sub_idx, _ = llm_tasks[actual_idx]
+                            ppt_data[(row_idx, sub_idx)] = {"explain": f"{kp}的核心知识点"}
+
+        # 没有任务时填充默认值
+        if not llm_tasks:
+            for row_idx, dim in enumerate(dimensions):
+                if len(dim) <= 1:
+                    ppt_data[(row_idx, 0)] = {"explain": f"{dim[0]}的核心知识点"}
 
         prs = Presentation()
         slide_w = prs.slide_width
@@ -347,7 +380,6 @@ def create_ppt_tool(llm_generator, skill_name: str, job_name: str, dimensions: l
 
                 item_data = ppt_data.get((row_idx, 0), {})
                 explain_text = item_data.get("explain", "")
-                example_text = item_data.get("example", "").replace('\\n', '\n')
 
                 tx_title = slide.shapes.add_textbox(Inches(1), Inches(0.6), Inches(8), Inches(0.8))
                 tf = tx_title.text_frame
@@ -359,7 +391,7 @@ def create_ppt_tool(llm_generator, skill_name: str, job_name: str, dimensions: l
                 p.font.color.rgb = DARK_TEXT
                 p.alignment = PP_ALIGN.CENTER
 
-                tx_explain = slide.shapes.add_textbox(Inches(1), Inches(1.5), Inches(8), Inches(1.5))
+                tx_explain = slide.shapes.add_textbox(Inches(1), Inches(1.5), Inches(8), Inches(4.0))
                 tfe = tx_explain.text_frame
                 tfe.word_wrap = True
                 p = tfe.paragraphs[0]
@@ -368,21 +400,6 @@ def create_ppt_tool(llm_generator, skill_name: str, job_name: str, dimensions: l
                 p.font.color.rgb = DARK_TEXT
                 p.alignment = PP_ALIGN.LEFT
                 p.line_spacing = Pt(18)
-
-                code_bg = _add_shape(slide, MSO_SHAPE.ROUNDED_RECTANGLE,
-                                    Inches(1), Inches(3.0), Inches(8), Inches(3.5),
-                                    RGBColor(0x1E, 0x1E, 0x1E))
-
-                tx_code = slide.shapes.add_textbox(Inches(1.2), Inches(3.1), Inches(7.6), Inches(3.3))
-                tfc = tx_code.text_frame
-                tfc.word_wrap = True
-                p = tfc.paragraphs[0]
-                p.text = example_text
-                p.font.size = Pt(10)
-                p.font.name = "Consolas"
-                p.font.color.rgb = RGBColor(0xA9, 0xB7, 0xC6)
-                p.alignment = PP_ALIGN.LEFT
-                p.line_spacing = Pt(14)
 
             else:
                 # ===== 有子知识点 =====
@@ -425,7 +442,6 @@ def create_ppt_tool(llm_generator, skill_name: str, job_name: str, dimensions: l
                     sub_point = dim[sub_idx]
                     item_data = ppt_data.get((row_idx, sub_idx), {})
                     explain_text = item_data.get("explain", "")
-                    example_text = item_data.get("example", "").replace('\\n', '\n')
 
                     bg_color2, accent2 = PAGE_THEMES[(row_idx + sub_idx) % len(PAGE_THEMES)]
                     layout_style = LAYOUTS[(row_idx + sub_idx) % len(LAYOUTS)]
@@ -453,7 +469,7 @@ def create_ppt_tool(llm_generator, skill_name: str, job_name: str, dimensions: l
                     p2.font.color.rgb = DARK_TEXT
                     p2.alignment = PP_ALIGN.CENTER
 
-                    tx_explain2 = slide2.shapes.add_textbox(Inches(1), Inches(1.5), Inches(8), Inches(1.5))
+                    tx_explain2 = slide2.shapes.add_textbox(Inches(1), Inches(1.5), Inches(8), Inches(4.0))
                     tfe2 = tx_explain2.text_frame
                     tfe2.word_wrap = True
                     p2 = tfe2.paragraphs[0]
@@ -462,21 +478,6 @@ def create_ppt_tool(llm_generator, skill_name: str, job_name: str, dimensions: l
                     p2.font.color.rgb = DARK_TEXT
                     p2.alignment = PP_ALIGN.LEFT
                     p2.line_spacing = Pt(18)
-
-                    code_bg2 = _add_shape(slide2, MSO_SHAPE.ROUNDED_RECTANGLE,
-                                        Inches(1), Inches(3.0), Inches(8), Inches(3.5),
-                                        RGBColor(0x1E, 0x1E, 0x1E))
-
-                    tx_code2 = slide2.shapes.add_textbox(Inches(1.2), Inches(3.1), Inches(7.6), Inches(3.3))
-                    tfc2 = tx_code2.text_frame
-                    tfc2.word_wrap = True
-                    p2 = tfc2.paragraphs[0]
-                    p2.text = example_text
-                    p2.font.size = Pt(10)
-                    p2.font.name = "Consolas"
-                    p2.font.color.rgb = RGBColor(0xA9, 0xB7, 0xC6)
-                    p2.alignment = PP_ALIGN.LEFT
-                    p2.line_spacing = Pt(14)
                 
                 
 
